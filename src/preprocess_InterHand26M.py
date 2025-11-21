@@ -1,7 +1,6 @@
 import numpy as np
 import os
 import os.path as osp
-import json
 from pycocotools.coco import COCO
 import tqdm
 from collections import defaultdict
@@ -11,12 +10,18 @@ import cv2
 import smplx
 import torch
 from pathlib import Path
+import json
+import webdataset as wds
 
 from utils import *
 
 
 IH26M_ROOT = r"/data_1/datasets_temp/InterHand2.6M_5fps_batch1/"
 SPLIT = "val"  # train val test
+OUTPUT_PATTERN = f"wds_output/ih26m_{SPLIT}-%06d.tar"
+MAX_COUNT = 128  # 每个 tar 包包含多少个 Clip，根据显存和文件大小调整
+MAX_SIZE = 3 * 1024 * 1024 * 1024
+os.makedirs(os.path.dirname(OUTPUT_PATTERN), exist_ok=True)
 
 # IH26M joint set
 joint_set = {
@@ -314,51 +319,144 @@ def process_single_annot(sample, h):
     focal = [intrinsics[0, 0].item(), intrinsics[1, 1].item()]
     princpt = [intrinsics[0, 2].item(), intrinsics[1, 2].item()]
 
+    img = cv2.imread(osp.join(IH26M_ROOT, "images", SPLIT, img_path))
+    success, img_bytes = cv2.imencode(".webp", img, [cv2.IMWRITE_WEBP_QUALITY, 100])
+    handedness = handedness
+    hand_bbox = bbox_tight
+    joint_img = reorder_joints(joint_img, IH26M_RJOINTS_ORDER, TARGET_JOINTS_ORDER)
+    joint_hand_bbox = reorder_joints(joint_bbox_img, IH26M_RJOINTS_ORDER, TARGET_JOINTS_ORDER)
+    joint_cam = reorder_joints(joint_cam, IH26M_RJOINTS_ORDER, TARGET_JOINTS_ORDER)
+    joint_rel = reorder_joints(joint_rel, IH26M_RJOINTS_ORDER, TARGET_JOINTS_ORDER)
+    joint_valid = joint_valid
+    mano_pose = pose[0].numpy()
+    mano_shape = shape[0].numpy()
+    timestamp = sample["frame_idx"] * 200.0
+    focal = np.array(focal)
+    princpt = np.array(princpt)
+
+    if not success:
+        raise Exception(
+            f"Failed to encode the image for {osp.join(IH26M_ROOT, 'images', SPLIT, img_path)}"
+        )
+
     annot_item = {
         "img_path": img_path,
-        "frame_idx": sample["frame_idx"],
+        "img_bytes": img_bytes,
         "handedness": handedness,
-        "bbox_tight": bbox_tight,
+        "hand_bbox": hand_bbox,
         "joint_img": joint_img,
-        "joint_bbox_img": joint_bbox_img,
+        "joint_hand_bbox": joint_hand_bbox,
         "joint_cam": joint_cam,
-        "joint_valid": joint_valid,
         "joint_rel": joint_rel,
-        "mano_pose": pose[0].numpy(),
-        "mano_shape": shape[0].numpy(),
-        "focal": np.array(focal),
-        "princpt": np.array(princpt),
+        "joint_valid": joint_valid,
+        "mano_pose": mano_pose,
+        "mano_shape": mano_shape,
+        "timestamp": timestamp,
+        "focal": focal,
+        "princpt": princpt,
+        # custom area
+        "aid": sample['aid']
     }
 
     return annot_item
 
-for (capture_id, seq_name, cam_id), annots in tqdm(seq_annot.items(), ncols=100):
-    for h in ['r', 'l']:
-        # find valid range
-        start, end = 0, 0
-        while start < len(annots):
-            while start < len(annots) and annots[start][f"{h}hand_bbox"] is None:
-                start += 1
-            end = start
-            while end < len(annots) and annots[end][f"{h}hand_bbox"] is not None:
-                end += 1
+# 定义需要堆叠成 Numpy 数组的字段
+NUMPY_KEYS = [
+    "hand_bbox", "joint_img", "joint_hand_bbox",
+    "joint_cam", "joint_rel", "joint_valid",
+    "mano_pose", "mano_shape", "timestamp",
+    "focal", "princpt"
+]
 
-            # guard invalid range
-            if not start < len(annots):
-                continue
+with wds.ShardWriter(OUTPUT_PATTERN, maxcount=MAX_COUNT, maxsize=MAX_SIZE) as sink:
+    for (capture_id, seq_name, cam_id), annots in tqdm.tqdm(seq_annot.items(), ncols=100):
+        # 遍历左右手
+        for h in ['r', 'l']:
+            start = 0
+            while start < len(annots):
+                # 1. 寻找连续有效帧的起始点
+                while start < len(annots) and annots[start][f"{h}hand_bbox"] is None:
+                    start += 1
 
-            # process
-            single_sequence = {
-                "capture_id": capture_id,
-                "seq_name": seq_name,
-                "cam_id": cam_id,
-                "annots": []
-            }
-            for i in range(start, end):
-                sample = annots[i]
-                try:
-                    sample_processed = process_single_annot(sample, h)
-                except Exception as ex:
-                    print(f"Error occured at capture={capture_id}, seq={seq_name}, cam={cam_id}, frame={sample['frame_idx']}, ex={str(ex)}")
+                # 2. 寻找连续有效帧的结束点
+                end = start
+                while end < len(annots) and annots[end][f"{h}hand_bbox"] is not None:
+                    end += 1
+
+                # 如果没有找到有效片段，跳出
+                if start >= len(annots):
                     break
-                single_sequence["annots"].append(sample_processed)
+
+                # ================= 处理单个 Clip (start -> end) =================
+                clip_frames = []
+                clip_descs = []
+
+                # 3. 逐帧处理并收集数据
+                valid_clip = True
+                for i in range(start, end):
+                    sample = annots[i]
+                    try:
+                        # 调用你定义的单帧处理函数
+                        processed_frame = process_single_annot(sample, h)
+
+                        # 生成描述信息
+                        desc = {
+                            "capture_id": capture_id,
+                            "seq_name": seq_name,
+                            "cam_id": cam_id,
+                            "aid": processed_frame["aid"]
+                        }
+                        # 删除 aid，因为它不属于 Tensor 数据
+                        del processed_frame["aid"]
+
+                        clip_frames.append(processed_frame)
+                        clip_descs.append(desc)
+
+                    except Exception as ex:
+                        print(f"[Error] Cap={capture_id} Seq={seq_name} Frame={sample['frame_idx']}: {ex}")
+                        valid_clip = False
+                        break
+
+                # 更新下一次循环的起点
+                current_start_frame_idx = annots[start]['frame_idx']
+                start = end
+
+                # 如果处理过程中出错或片段为空，跳过写入
+                if not valid_clip or len(clip_frames) == 0:
+                    continue
+
+                # ================= 聚合数据并写入 WDS =================
+                # 构造唯一的 Key
+                # 格式: capture_seq_cam_hand_startFrame
+                key_str = f"{capture_id}_{seq_name}_{cam_id}_{h}_{current_start_frame_idx}"
+
+                # 初始化 WDS Sample 字典
+                wds_sample = {
+                    "__key__": key_str,
+                }
+
+                # A. 处理图片字节流 (List[bytes]) -> Pickle
+                # 这里我们收集所有帧的 webp bytes
+                imgs_bytes_list = [f["img_bytes"] for f in clip_frames]
+                wds_sample["img_bytes.pickle"] = imgs_bytes_list
+
+                # B. 处理 Numpy 数据 (List[ndarray]) -> Stacked ndarray -> .npy
+                for k in NUMPY_KEYS:
+                    # 提取该字段的所有帧的数据
+                    data_list = [f[k] for f in clip_frames]
+                    # 堆叠: [T, ...]
+                    stacked_data = np.stack(data_list)
+                    wds_sample[f"{k}.npy"] = stacked_data
+
+                # C. 处理标量/全局属性 (取第一帧即可，假设同一 Clip 内不变)
+                # 例如 handedness
+                wds_sample["handedness.json"] = clip_frames[0]["handedness"]
+
+                # D. 处理描述信息 (List[Dict]) -> .json
+                # 注意：这里我们将整个序列的描述存为一个 json list
+                wds_sample["additional_desc.json"] = clip_descs
+
+                # E. 写入
+                sink.write(wds_sample)
+
+print("Done")

@@ -11,6 +11,7 @@ wheels/
 
 # model files
 models/
+wds_output/
 
 # editor files
 .vscode/

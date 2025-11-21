@@ -1,4 +1,131 @@
 import numpy as np
+from typing import *
+from collections import defaultdict
+import torch
+
+
+IH26M_RJOINTS_ORDER = (
+    "Thumb_4",
+    "Thumb_3",
+    "Thumb_2",
+    "Thumb_1",
+    "Index_4",
+    "Index_3",
+    "Index_2",
+    "Index_1",
+    "Middle_4",
+    "Middle_3",
+    "Middle_2",
+    "Middle_1",
+    "Ring_4",
+    "Ring_3",
+    "Ring_2",
+    "Ring_1",
+    "Pinky_4",
+    "Pinky_3",
+    "Pinky_2",
+    "Pinky_1",
+    "Wrist",
+)
+HO3D_JOINTS_ORDER = (
+    "Wrist",
+
+    "Index_1",
+    "Index_2",
+    "Index_3",
+
+    "Middle_1",
+    "Middle_2",
+    "Middle_3",
+
+    "Pinky_1",
+    "Pinky_2",
+    "Pinky_3",
+
+    "Ring_1",
+    "Ring_2",
+    "Ring_3",
+
+    "Thumb_1",
+    "Thumb_2",
+    "Thumb_3",
+
+    "Thumb_4",
+    "Index_4",
+    "Middle_4",
+    "Ring_4",
+    "Pinky_4",
+)
+MANO_JOINTS_ORDER = (
+    "Wrist",
+    "Index_1",
+    "Index_2",
+    "Index_3",
+    "Middle_1",
+    "Middle_2",
+    "Middle_3",
+    "Pinky_1",
+    "Pinky_2",
+    "Pinky_3",
+    "Ring_1",
+    "Ring_2",
+    "Ring_3",
+    "Thumb_1",
+    "Thumb_2",
+    "Thumb_3",
+)
+
+TARGET_JOINTS_ORDER = (
+    "Wrist",
+    "Thumb_1",
+    "Thumb_2",
+    "Thumb_3",
+    "Thumb_4",
+    "Index_1",
+    "Index_2",
+    "Index_3",
+    "Index_4",
+    "Middle_1",
+    "Middle_2",
+    "Middle_3",
+    "Middle_4",
+    "Ring_1",
+    "Ring_2",
+    "Ring_3",
+    "Ring_4",
+    "Pinky_1",
+    "Pinky_2",
+    "Pinky_3",
+    "Pinky_4",
+)
+
+TARGET_JOINTS_CONNECTION = [
+    (0, 1),   # Wrist -> Thumb_1
+    (0, 5),   # Wrist -> Index_1
+    (0, 9),   # Wrist -> Middle_1
+    (0, 13),  # Wrist -> Ring_1
+    (0, 17),  # Wrist -> Pinky_1
+    # Thumb
+    (1, 2),   # Thumb_1 -> Thumb_2
+    (2, 3),   # Thumb_2 -> Thumb_3
+    (3, 4),   # Thumb_3 -> Thumb_4
+    # Index
+    (5, 6),   # Index_1 -> Index_2
+    (6, 7),   # Index_2 -> Index_3
+    (7, 8),   # Index_3 -> Index_4
+    # Middle
+    (9, 10),  # Middle_1 -> Middle_2
+    (10, 11), # Middle_2 -> Middle_3
+    (11, 12), # Middle_3 -> Middle_4
+    # Ring
+    (13, 14), # Ring_1 -> Ring_2
+    (14, 15), # Ring_2 -> Ring_3
+    (15, 16), # Ring_3 -> Ring_4
+    # Pinky
+    (17, 18), # Pinky_1 -> Pinky_2
+    (18, 19), # Pinky_2 -> Pinky_3
+    (19, 20)  # Pinky_3 -> Pinky_4
+]
 
 def get_bbox(joint_img, joint_valid, extend_ratio=1.2):
     x_img, y_img = joint_img[:,0], joint_img[:,1]
@@ -66,3 +193,46 @@ def cam2pixel(cam_coord, f, c):
     y = cam_coord[:,1] / cam_coord[:,2] * f[1] + c[1]
     z = cam_coord[:,2]
     return np.stack((x,y,z),1)
+
+
+_JOINT_REORDER_CACHE = defaultdict(dict)
+def reorder_joints(joints: np.ndarray, origin: List[str], target: List[str]) -> np.ndarray:
+    """
+    Reorder the joints from origin order to target order. Optimized for fast reordering.
+    (NumPy Version)
+
+    Args:
+        joints (np.ndarray): Input joint data of shape [..., J, D] where J is number of joints
+        origin: List of joint names in the original order (length J)
+        target: List of joint names in the target order (length J)
+
+    Returns:
+        np.ndarray: Reordered joint data of shape [..., J, D]
+
+    Raises:
+        TypeError: If origin or target are not lists/tuples
+        ValueError: If origin and target lists have different lengths or contain different joints
+    """
+    if not isinstance(origin, (list, tuple)) or not isinstance(target, (list, tuple)):
+        raise TypeError("Joint orders must be lists/tuples")
+
+    cache_key = (tuple(origin), tuple(target))
+
+    if cache_key not in _JOINT_REORDER_CACHE:
+        if len(origin) != len(target):
+            raise ValueError("Origin and target joint lists must have same length")
+        if set(origin) != set(target):
+            raise ValueError("Origin and target joint lists must contain same joints")
+
+        origin_map = {name: idx for idx, name in enumerate(origin)}
+        try:
+            indices = [origin_map[name] for name in target]
+        except KeyError as e:
+            raise ValueError(f"Missing joint in mapping: {e}")
+
+        # 使用 np.array 存储索引
+        _JOINT_REORDER_CACHE[cache_key] = np.array(indices, dtype=np.int64)
+
+    # 使用 np.take 进行指定维度的索引选择
+    # axis=-2 对应 PyTorch 中的 index_select(dim=-2)
+    return np.take(joints, _JOINT_REORDER_CACHE[cache_key], axis=-2)
