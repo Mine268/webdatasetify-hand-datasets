@@ -11,7 +11,7 @@ wheels/
 
 # model files
 models/
-wds_output/
+*.tar
 
 # editor files
 .vscode/
