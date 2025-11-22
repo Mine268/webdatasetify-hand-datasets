@@ -21,9 +21,9 @@ from utils import *
 
 # ================= 配置区域 =================
 IH26M_ROOT = r"/data_1/datasets_temp/InterHand2.6M_5fps_batch1/"
-SPLIT = "train"  # train val test
+SPLIT = os.environ.get("SPLIT", "train")  # train val test
 # 注意：输出路径增加了 {worker_id} 占位符，防止多进程文件名冲突
-OUTPUT_PATTERN = f"ih26m_wds_output/ih26m_{SPLIT}-worker{{worker_id}}-%06d.tar"
+OUTPUT_PATTERN = f"ih26m_{SPLIT}_wds_output/ih26m_{SPLIT}-worker{{worker_id}}-%06d.tar"
 MAX_COUNT = 100000  # 已修改：大幅增加数量限制，让切割主要由 MAX_SIZE 决定
 MAX_SIZE = 3 * 1024 * 1024 * 1024  # 3GB
 NUM_WORKERS = 30 # 建议设置为 CPU 核心数 - 2
@@ -168,7 +168,7 @@ def process_single_annot(sample, h):
     princpt = np.array(princpt)
 
     annot_item = {
-        # "img_path": img_sub_path, # 不需要存入最终 Tensor
+        "img_path": img_sub_path, # 不需要存入最终 Tensor
         "img_bytes": img_bytes,
         "handedness": handedness,
         "hand_bbox": bbox_tight,
@@ -271,11 +271,13 @@ def process_sequence_batch(batch_seqs, worker_id):
                     img_bytes_pickle = pickle.dumps([f["img_bytes"] for f in clip_frames])
 
                     # 2. JSON: dict/list/str -> str (Writer 会自动 encode 为 utf-8)
+                    imgs_path_json = json.dumps([v["img_path"] for v in clip_frames])
                     handedness_json = json.dumps(clip_frames[0]["handedness"])
                     desc_json = json.dumps(clip_descs)
 
                     wds_sample = {
                         "__key__": key_str,
+                        "imgs_path.json": imgs_path_json,
                         "img_bytes.pickle": img_bytes_pickle,
                         "handedness.json": handedness_json,
                         "additional_desc.json": desc_json,

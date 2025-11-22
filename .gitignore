@@ -7,11 +7,12 @@ wheels/
 *.egg-info
 
 # Virtual environments
-.venv
+.venv/
 
 # model files
 models/
 *.tar
+temp/
 
 # editor files
 .vscode/
