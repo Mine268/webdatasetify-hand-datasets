@@ -12,7 +12,7 @@ wheels/
 # model files
 models/
 *.tar
-temp/
+temp*/
 
 # editor files
 .vscode/

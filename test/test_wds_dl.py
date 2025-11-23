@@ -9,7 +9,7 @@ import tqdm
 
 # ================= 配置区域 =================
 # 替换为你生成的数据路径，支持 shell 风格的通配符
-URLS = glob.glob("/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/ih26m_train-worker*.tar")
+URLS = glob.glob("/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar")
 
 # 定义需要从 Sequence 拆分出来的 Numpy 字段 (对应 Writer 中的 NUMPY_KEYS)
 # 注意：Writer 中 keys 是不带后缀的，但 wds decode 后 key 会带上后缀 (如 .npy)
