@@ -434,6 +434,59 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
         )
     cv2.imwrite(f"{output_dir}/mano.png", img4)
 
+import kornia
+def crop_bbox_kornia(
+    image: torch.Tensor,
+    bbox: torch.Tensor,
+    padding_mode: str = 'zeros',
+    align_corners: bool = True
+) -> torch.Tensor:
+    """
+    使用 Kornia 对图像按 bbox 裁剪，输出尺寸为 bbox 的整数宽高，越界部分填充为 0。
+
+    Args:
+        image (torch.Tensor): 输入图像，shape (C, H, W)
+        bbox (torch.Tensor): 边界框，shape (4,)，格式 [x1, y1, x2, y2]
+        padding_mode (str): 填充模式，'zeros', 'border', 'reflection'
+        align_corners (bool): 插值对齐方式
+
+    Returns:
+        torch.Tensor: 裁剪结果，shape (C, h_out, w_out)，其中
+                      h_out = max(1, round(y2 - y1))
+                      w_out = max(1, round(x2 - x1))
+    """
+    if image.dim() != 3:
+        raise ValueError(f"Expected image shape (C, H, W), got {image.shape}")
+    if bbox.shape != (4,):
+        raise ValueError(f"Expected bbox shape (4,), got {bbox.shape}")
+
+    # 确保 bbox 是 float
+    bbox = bbox.float()
+
+    # 计算目标输出尺寸（取整，至少为1）
+    x1, y1, x2, y2 = bbox
+    w_out = max(1, int(torch.round(x2 - x1).item()))
+    h_out = max(1, int(torch.round(y2 - y1).item()))
+
+    # 构造源 box（原始 bbox 的四个角点）
+    src_vertices = torch.tensor([
+        [x1.item(), y1.item()],
+        [x2.item(), y1.item()],
+        [x2.item(), y2.item()],
+        [x1.item(), y2.item()]
+    ], device=image.device, dtype=image.dtype).unsqueeze(0)  # (1, 4, 2)
+
+    # 添加 batch 维度
+    image_batch = image.unsqueeze(0)  # (1, C, H, W)
+
+    cropped = kornia.geometry.transform.crop_and_resize(
+        image_batch,
+        src_vertices,
+        size=(h_out, w_out),          # 注意：size 是 (height, width)
+    )  # 输出: (1, C, h_out, w_out)
+
+    return cropped.squeeze(0)  # (C, h_out, w_out)
+
 def verify_batch(batch, output_dir: str, source_prefix: str, bx: int = 0, tx: int = 0):
     import cv2
     import smplx
@@ -442,6 +495,16 @@ def verify_batch(batch, output_dir: str, source_prefix: str, bx: int = 0, tx: in
     img = cv2.imread(f"{source_prefix}/" + batch["imgs_path"][bx][tx])
     if batch["flip"][bx]:
         img = img[:, ::-1].copy()
+        cv2.putText(
+            img,
+            "flipped",
+            (20, 90),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.5,
+            (255, 255, 255),
+            3,
+            cv2.LINE_AA,
+        )
     cv2.imwrite(f"{output_dir}/origin.png", img)
 
     # patches
@@ -485,19 +548,16 @@ def verify_batch(batch, output_dir: str, source_prefix: str, bx: int = 0, tx: in
     cv2.imwrite(f"{output_dir}/bbox-joint_img.png", img2)
 
     # joint_patch_bbox, joint_hand_bbox
-    img3 = img.copy()
-    joint_patch_bbox = batch["joint_patch_bbox"][bx, tx].cpu().numpy()
-    joint_hand_bbox = batch["joint_hand_bbox"][bx, tx].cpu().numpy()
-    patch_bbox = batch["patch_bbox"][bx, tx].cpu().numpy()
-    hand_bbox = batch["hand_bbox"][bx, tx].cpu().numpy()
-    img_patch_bbox = img3[
-        int(patch_bbox[1]):int(patch_bbox[3]),
-        int(patch_bbox[0]):int(patch_bbox[2])
-    ].copy()
-    img_hand_bbox = img3[
-        int(hand_bbox[1]):int(hand_bbox[3]),
-        int(hand_bbox[0]):int(hand_bbox[2])
-    ].copy()
+    img3 = torch.from_numpy(img.copy()).float().permute(2, 0, 1) / 255
+    joint_patch_bbox = batch["joint_patch_bbox"][bx, tx].cpu()
+    joint_hand_bbox = batch["joint_hand_bbox"][bx, tx].cpu()
+    patch_bbox = batch["patch_bbox"][bx, tx].cpu()
+    hand_bbox = batch["hand_bbox"][bx, tx].cpu()
+    img_patch_bbox = crop_bbox_kornia(img3, patch_bbox)
+    img_hand_bbox = crop_bbox_kornia(img3, hand_bbox)
+    img3 = img3.permute(1, 2, 0).numpy()
+    img_patch_bbox = (img_patch_bbox.permute(1, 2, 0).contiguous().numpy() * 255).astype(np.uint8)
+    img_hand_bbox = (img_hand_bbox.permute(1, 2, 0).contiguous().numpy() * 255).astype(np.uint8)
     for i, _ in enumerate(joint_patch_bbox):
         cv2.circle(
             img_patch_bbox,
@@ -584,7 +644,7 @@ def verify_batch(batch, output_dir: str, source_prefix: str, bx: int = 0, tx: in
     princpt = batch["princpt"][bx, tx].cpu()
     img5 = img.copy()
     with torch.inference_mode():
-        mano_output = mano_layer["right" if not flip else "left"](
+        mano_output = mano_layer["right"](
             betas=mano_shape,
             global_orient=mano_pose[:, :3],
             hand_pose=mano_pose[:, 3:],
@@ -603,6 +663,8 @@ def verify_batch(batch, output_dir: str, source_prefix: str, bx: int = 0, tx: in
             (int(vt[0]), int(vt[1])),
             1, (255, 255, 0), -1
         )
+    mano_valid = batch["mano_valid"][bx, tx].cpu()
+    print(f"mano_valid={mano_valid}")
     cv2.imwrite(f"{output_dir}/mano.png", img5)
 
 if __name__ == "__main__":
@@ -616,30 +678,32 @@ if __name__ == "__main__":
         num_workers=4,
     )
 
+    import os
+
     batch = None
     x = 0
-    for batch_ in tqdm(loader, ncols=70):
+    for i, batch_ in enumerate(tqdm(loader, ncols=70)):
         batch = copy.deepcopy(batch_)
+        # 验证数据规整的正确性
+        batch2 = preprocess_batch(
+            batch,
+            [256, 256],
+            1.1,
+            False,
+            torch.device("cuda:0")
+        )
+        os.makedirs(f"temp_processed_{i}", exist_ok=True)
+        verify_batch(
+            batch2,
+            f"temp_processed_{i}",
+            "/mnt/qnap/data/datasets/InterHand2.6M_5fps_batch1/images/train/",
+            10,
+            0,
+        )
         x += 1
-        if x > 1:
+        if x > 10:
             break
 
     # 直接验证数据满足一致性
     bx, tx = 10, 0
-    verify_origin_data(batch, "temp_origin", 10, 0)
-
-    # 验证数据规整的正确性
-    batch2 = preprocess_batch(
-        batch,
-        [256, 256],
-        1.1,
-        False,
-        torch.device("cuda:0")
-    )
-    verify_batch(
-        batch2,
-        "temp_processed",
-        "/mnt/qnap/data/datasets/InterHand2.6M_5fps_batch1/images/train/",
-        10,
-        0,
-    )
+    verify_origin_data(batch_, "temp_origin", 10, 0)
