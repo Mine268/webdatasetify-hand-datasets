@@ -21,7 +21,7 @@ from utils import *
 
 # ================= 配置区域 =================
 IH26M_ROOT = r"/data_1/datasets_temp/InterHand2.6M_5fps_batch1/"
-SPLIT = os.environ.get("SPLIT", "train")  # train val test
+SPLIT = os.environ.get("SPLIT", "val")  # train val test
 # 注意：输出路径增加了 {worker_id} 占位符，防止多进程文件名冲突
 OUTPUT_PATTERN = f"ih26m_{SPLIT}_wds_output/ih26m_{SPLIT}-worker{{worker_id}}-%06d.tar"
 MAX_COUNT = 100000  # 已修改：大幅增加数量限制，让切割主要由 MAX_SIZE 决定
@@ -74,10 +74,18 @@ joint_set["root_joint_idx"] = {
 
 # 定义需要堆叠成 Numpy 数组的字段
 NUMPY_KEYS = [
-    "hand_bbox", "joint_img", "joint_hand_bbox",
-    "joint_cam", "joint_rel", "joint_valid",
-    "mano_pose", "mano_shape", "timestamp",
-    "focal", "princpt"
+    "hand_bbox",
+    "joint_img",
+    "joint_hand_bbox",
+    "joint_cam",
+    "joint_rel",
+    "joint_valid",
+    "mano_pose",
+    "mano_shape",
+    "mano_valid",
+    "timestamp",
+    "focal",
+    "princpt",
 ]
 
 # ================= 处理函数定义 =================
@@ -107,8 +115,14 @@ def process_single_annot(sample, h):
     r = np.array(sample["cam_param"]["R"]).astype(np.float32)
     # t = np.array(sample["cam_param"]["t"]).astype(np.float32) # unused in snippet
 
-    pose =  np.array(sample["mano_param"][handedness]["pose"]).astype(np.float32)
-    shape = np.array(sample["mano_param"][handedness]["shape"]).astype(np.float32)
+    mano_valid = True
+    if sample["mano_param"][handedness] is not None:
+        pose =  np.array(sample["mano_param"][handedness]["pose"]).astype(np.float32)
+        shape = np.array(sample["mano_param"][handedness]["shape"]).astype(np.float32)
+    else:
+        pose = np.zeros((48,)).astype(np.float32)
+        shape = np.zeros((10,)).astype(np.float32)
+        mano_valid = False
     # trans = np.array(sample["mano_param"][handedness]["trans"]).astype(np.float32) # unused in snippet
 
     # MANO param trans
@@ -179,6 +193,7 @@ def process_single_annot(sample, h):
         "joint_valid": joint_valid,
         "mano_pose": mano_pose,
         "mano_shape": mano_shape,
+        "mano_valid": mano_valid,
         "timestamp": timestamp,
         "focal": focal,
         "princpt": princpt,
