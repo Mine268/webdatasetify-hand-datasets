@@ -17,10 +17,18 @@ import torchvision
 import kornia.geometry.transform as T
 
 NPY_KEYS = [
-    "hand_bbox.npy", "joint_img.npy", "joint_hand_bbox.npy",
-    "joint_cam.npy", "joint_rel.npy", "joint_valid.npy",
-    "mano_pose.npy", "mano_shape.npy", "timestamp.npy",
-    "focal.npy", "princpt.npy"
+    "hand_bbox.npy",
+    "joint_img.npy",
+    "joint_hand_bbox.npy",
+    "joint_cam.npy",
+    "joint_rel.npy",
+    "joint_valid.npy",
+    "mano_pose.npy",
+    "mano_shape.npy",
+    "mano_valid.npy",
+    "timestamp.npy",
+    "focal.npy",
+    "princpt.npy",
 ]
 
 COLLATE_LIST_KEYS = [
@@ -181,7 +189,7 @@ def preprocess_batch(
     # MANO标注
     mano_pose: torch.Tensor = batch["mano_pose"].to(device)  # [B,T,48]
     mano_shape: torch.Tensor = batch["mano_shape"].to(device)  # [B,T,10]
-    # TODO: mano_valid
+    mano_valid: torch.Tensor = batch["mano_valid"].to(device)  # [B,T,10]
 
     # timestamp
     timestamp: torch.Tensor = batch["timestamp"].to(device)  # [B,T]
@@ -232,7 +240,7 @@ def preprocess_batch(
         "joint_valid": joint_valid,
         "mano_pose": mano_pose,
         "mano_shape": mano_shape,
-        # "mano_valid": mano_valid,
+        "mano_valid": mano_valid,
         "timestamp": timestamp,
         "focal": focal,
         "princpt": princpt
@@ -600,7 +608,7 @@ def verify_batch(batch, output_dir: str, source_prefix: str, bx: int = 0, tx: in
 if __name__ == "__main__":
     loader = get_dataloader(
         glob.glob(
-            "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar"
+            "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train2/*.tar"
         ),
         num_frames=7,
         stride=1,

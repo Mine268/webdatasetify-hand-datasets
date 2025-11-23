@@ -8,11 +8,11 @@ import glob
 
 # 1. 输入路径：支持 glob 通配符
 # 例如你的多线程代码生成了一堆散碎文件：part-000000.tar, part-000001.tar ...
-SOURCE_PATTERN = glob.glob("ih26m_val_wds_output/ih26m_val-worker*.tar")
+SOURCE_PATTERN = glob.glob("ih26m_train_wds_output/ih26m_train-worker*.tar")
 
 # 2. 输出路径：最终合并后的文件命名格式
 # %06d 会自动递增：ih26m_val-000000.tar, ih26m_val-000001.tar ...
-OUTPUT_PATTERN = "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/val/%06d.tar"
+OUTPUT_PATTERN = "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train2/%06d.tar"
 
 # 3. 限制参数
 # 3GB (推荐值：机械硬盘 1GB-3GB，SSD 200MB-500MB)
