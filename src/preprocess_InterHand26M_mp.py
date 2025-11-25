@@ -153,9 +153,9 @@ def process_single_annot(sample, h):
     full_img_path = osp.join(IH26M_ROOT, "images", SPLIT, img_sub_path)
     img = cv2.imread(full_img_path)
     if img is None:
-         # 尝试备用路径逻辑，根据实际数据集结构调整
-         full_img_path = osp.join(IH26M_ROOT, "images", SPLIT, sample["img_path"])
-         img = cv2.imread(full_img_path)
+        # 尝试备用路径逻辑，根据实际数据集结构调整
+        full_img_path = osp.join(IH26M_ROOT, "images", SPLIT, sample["img_path"])
+        img = cv2.imread(full_img_path)
 
     if img is None:
         raise FileNotFoundError(f"Image not found: {full_img_path}")
@@ -174,6 +174,9 @@ def process_single_annot(sample, h):
     joint_hand_bbox = reorder_joints(joint_bbox_img, IH26M_RJOINTS_ORDER, TARGET_JOINTS_ORDER)
     joint_cam = reorder_joints(joint_cam, IH26M_RJOINTS_ORDER, TARGET_JOINTS_ORDER)
     joint_rel = reorder_joints(joint_rel, IH26M_RJOINTS_ORDER, TARGET_JOINTS_ORDER)
+    joint_valid = reorder_joints(
+        joint_valid[..., None], IH26M_RJOINTS_ORDER, TARGET_JOINTS_ORDER
+    )[..., 0]
 
     mano_pose = pose[0].numpy()
     mano_shape = shape[0].numpy()

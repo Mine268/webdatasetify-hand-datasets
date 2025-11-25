@@ -144,7 +144,7 @@ def get_dataloader(
         dataset,
         batch_size=None,
         num_workers=num_workers,
-        prefetch_factor=2,
+        prefetch_factor=2 if num_workers > 0 else None,
         pin_memory=True
     )
 
@@ -364,12 +364,23 @@ def crop_bbox_kornia(
 
     return cropped.squeeze(0)  # (C, h_out, w_out)
 
-def verify_batch(batch, output_dir: str, source_prefix: str, bx: int = 0, tx: int = 0):
+
+def verify_batch(
+    batch,
+    trans_2d_mat: torch.Tensor,
+    output_dir: str,
+    source_prefix: str,
+    bx: int = 0,
+    tx: int = 0,
+):
     import cv2
     import smplx
 
+    trans_2d_mat = trans_2d_mat[bx, tx].cpu().numpy()
+
     # origin image
     img = cv2.imread(f"{source_prefix}/" + batch["imgs_path"][bx][tx])
+    img = cv2.warpPerspective(img, trans_2d_mat, img.shape[:2])
     if batch["flip"][bx]:
         img = img[:, ::-1].copy()
         cv2.putText(
@@ -544,15 +555,19 @@ def verify_batch(batch, output_dir: str, source_prefix: str, bx: int = 0, tx: in
     print(f"mano_valid={mano_valid}")
     cv2.imwrite(f"{output_dir}/mano.png", img5)
 
+
 if __name__ == "__main__":
+    np.random.seed(42)
+    torch.manual_seed(42)
+
     loader = get_dataloader(
         glob.glob(
-            "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train2/*.tar"
+            "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar"
         ),
         num_frames=7,
         stride=1,
         batch_size=32,
-        num_workers=4,
+        num_workers=0,
     )
 
     import os
@@ -562,18 +577,19 @@ if __name__ == "__main__":
     for i, batch_ in enumerate(tqdm(loader, ncols=70)):
         batch = copy.deepcopy(batch_)
         # 验证数据规整的正确性
-        batch2 = preprocess_batch(
+        batch2, trans_2d_mat = preprocess_batch(
             batch,
             [256, 256],
             1.1,
-            [0.5, 1.5],
+            [0.9, 1.1],
             [0.8, 1.1],
-            False,
+            True,
             torch.device("cuda:0")
         )
         os.makedirs(f"temp_processed_{i}", exist_ok=True)
         verify_batch(
             batch2,
+            trans_2d_mat,
             f"temp_processed_{i}",
             "/mnt/qnap/data/datasets/InterHand2.6M_5fps_batch1/images/train/",
             10,
