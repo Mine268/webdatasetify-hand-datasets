@@ -3,7 +3,33 @@ import torch
 from einops import rearrange
 import kornia.geometry.transform as KT
 import kornia.geometry.conversions as KC
-import kornia.geometry as KG
+import kornia.augmentation as KA
+
+class PixelLevelAugmentation(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.transforms = torch.nn.Sequential(
+            KA.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.8),
+            KA.RandomGrayscale(p=0.2),
+            KA.RandomPosterize(bits=3, p=0.2),
+            KA.RandomSharpness(sharpness=0.5, p=0.3),
+            KA.RandomEqualize(p=0.1),
+            KA.RandomGaussianNoise(mean=0.0, std=0.05, p=0.2),
+            KA.RandomMotionBlur(kernel_size=(3, 5), angle=35., direction=0.5, p=0.2),
+            KA.RandomGaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0), p=0.2),
+            KA.RandomErasing(scale=(0.02, 0.1), ratio=(0.3, 3.3), value=0.0, p=0.3),
+        )
+
+    def forward(self, input_tensor):
+        B, T, C, H, W = input_tensor.shape
+        input_tensor_aug = self.transforms(
+            input_tensor.reshape(B * T, C, H, W)
+        ).reshape(B, T, C, H, W)
+        input_tensor_aug = torch.clamp(input_tensor_aug, 0.0, 1.0)
+        return input_tensor_aug
+
+pixel_level_augemtation = PixelLevelAugmentation()
 
 def get_trans_3d_mat(
     rad: torch.Tensor,
@@ -126,6 +152,7 @@ def apply_perspective_to_points(
 
     return points_transformed
 
+@torch.no_grad()
 def preprocess_batch(
     batch_origin,
     patch_size: Tuple[int, int],
@@ -145,7 +172,7 @@ def preprocess_batch(
         scale_f_range: 进行内参增强变换的焦距乘数的范围
     """
     B, T = batch_origin["joint_cam"].shape[:2]
-    trans_2d_mat = None
+    trans_2d_mat = torch.eye(3, device=device).float()[None, None, :].expand(B, T, -1, -1)
 
     if not augmentation_flag:
         # 数据规整
@@ -221,17 +248,15 @@ def preprocess_batch(
             * (scale_z_range[1] - scale_z_range[0])
             + scale_z_range[0]
         )
-        # scale_f = (
-        #     torch.rand(B, 1, device=device).expand(-1, T)
-        #     * (scale_f_range[1] - scale_f_range[0])
-        #     + scale_f_range[0]
-        # )
-        # focal_new = focal * scale_f[:, :, None]
-        # princpt_noise = torch.randn(B, 1, 2, device=device).expand(-1, T, -1)
-        # princpt_noise = princpt_noise * torch.norm(princpt, dim=-1, keepdim=True) * 0.1111111
-        # princpt_new = princpt_noise + princpt
-        focal_new = focal.clone()
-        princpt_new = princpt.clone()
+        scale_f = (
+            torch.rand(B, 1, device=device).expand(-1, T)
+            * (scale_f_range[1] - scale_f_range[0])
+            + scale_f_range[0]
+        )
+        focal_new = focal * scale_f[:, :, None]
+        princpt_noise = torch.randn(B, 1, 2, device=device).expand(-1, T, -1)
+        princpt_noise = princpt_noise * torch.norm(princpt, dim=-1, keepdim=True) * 0.1111111
+        princpt_new = princpt_noise + princpt
 
         # 获得数据增强变换矩阵
         # [B,T,3,3]
@@ -318,6 +343,7 @@ def preprocess_batch(
             )
             patches.append(patch)
         patches: torch.Tensor = torch.stack(patches)
+        patches = pixel_level_augemtation(patches)
 
         # 更新focal&princpt
         focal = focal_new

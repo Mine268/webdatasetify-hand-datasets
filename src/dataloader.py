@@ -379,8 +379,9 @@ def verify_batch(
     trans_2d_mat = trans_2d_mat[bx, tx].cpu().numpy()
 
     # origin image
+    print("\nimgs_path=" + f"{source_prefix}/" + batch["imgs_path"][bx][tx])
     img = cv2.imread(f"{source_prefix}/" + batch["imgs_path"][bx][tx])
-    img = cv2.warpPerspective(img, trans_2d_mat, img.shape[:2])
+    img = cv2.warpPerspective(img, trans_2d_mat, (img.shape[1], img.shape[0]))
     if batch["flip"][bx]:
         img = img[:, ::-1].copy()
         cv2.putText(
@@ -557,12 +558,14 @@ def verify_batch(
 
 
 if __name__ == "__main__":
+    import random
+    random.seed(42)
     np.random.seed(42)
     torch.manual_seed(42)
 
     loader = get_dataloader(
         glob.glob(
-            "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar"
+            "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train2/*.tar"
         ),
         num_frames=7,
         stride=1,
@@ -595,6 +598,8 @@ if __name__ == "__main__":
             10,
             0,
         )
+        if not torch.all(batch2["joint_valid"][10, 0] > 0.5).item():
+            print(f">> False in joint_valid, #iter={i}: {batch2['joint_valid'][10, 0]}")
         x += 1
         if x > 10:
             break
