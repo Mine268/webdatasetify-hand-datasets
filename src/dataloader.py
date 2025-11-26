@@ -565,7 +565,7 @@ if __name__ == "__main__":
 
     loader = get_dataloader(
         glob.glob(
-            "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train2/*.tar"
+            "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar"
         ),
         num_frames=7,
         stride=1,
@@ -586,6 +586,7 @@ if __name__ == "__main__":
             1.1,
             [0.9, 1.1],
             [0.8, 1.1],
+            torch.pi / 12,
             True,
             torch.device("cuda:0")
         )

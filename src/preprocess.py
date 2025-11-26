@@ -33,7 +33,8 @@ pixel_level_augemtation = PixelLevelAugmentation()
 
 def get_trans_3d_mat(
     rad: torch.Tensor,
-    scale: torch.Tensor
+    scale: torch.Tensor,
+    axis_angle: torch.Tensor,
 ) -> torch.Tensor:
     """
     生成三维空间中的旋转变换增强矩阵
@@ -41,9 +42,10 @@ def get_trans_3d_mat(
     Args:
         rad: [...] 以z方向为旋转轴进行旋转的角度
         scale: [...] 对z分量进行缩放的系数
+        axis_angle: [..., 3] 全场景物体以该轴角表示的旋转进行变换的旋转轴角，若为空则不进行变换
 
     Returns:
-        mat: [..., 3, 3] 以上两个变换首先旋转然后缩放，对应的变换矩阵
+        mat: [..., 3, 3] 以上三个变换首先旋转然后缩放最后全局旋转，对应的变换矩阵
     """
     device = rad.device
     dtype = rad.dtype
@@ -59,6 +61,13 @@ def get_trans_3d_mat(
     mat[..., 1, 1] = cos_rad
     mat[..., 2, 2] = scale
 
+    if axis_angle is not None:
+        prefix_shape = axis_angle.shape[:-1]
+        axis_angle_mat = KC.axis_angle_to_rotation_matrix(
+            axis_angle.reshape(-1, 3)
+        ).reshape(*prefix_shape, 3, 3)
+        mat = axis_angle_mat @ mat
+
     return mat
 
 def get_trans_2d_mat(
@@ -68,6 +77,7 @@ def get_trans_2d_mat(
     princpt_old: torch.Tensor,
     focal_new: torch.Tensor,
     princpt_new: torch.Tensor,
+    axis_angle: torch.Tensor,
 ) -> torch.Tensor:
     """
     生成图像空间中对应的变换矩阵，其包括三维增强产生的变换以及内参增强产生的变换
@@ -77,6 +87,7 @@ def get_trans_2d_mat(
         scale_inv: [...] 对z分量进行缩放的系数的倒数，因为z的远离（系数>1）对应图像的缩小
         focal_old/new: [..., 2] 旧/新内参的焦距系数
         princpt_old/new: [..., 2] 旧/新内参的主点系数
+        axis_angle: [..., 3] 全场景物体以该轴角表示的旋转进行变换的旋转轴角，若为空则不进行变换
 
     Returns:
         mat: [..., 3, 3] 首先进行旋转，然后进行缩放，最后进行内参变换。\
@@ -112,6 +123,13 @@ def get_trans_2d_mat(
     mat[..., 1, 1] = cos_rad
     mat = mat * scale_inv[..., None, None]
     mat[..., 2, 2] = 1
+
+    if axis_angle is not None:
+        prefix_shape = axis_angle.shape[:-1]
+        axis_angle_mat = KC.axis_angle_to_rotation_matrix(
+            axis_angle.reshape(-1, 3)
+        ).reshape(*prefix_shape, 3, 3)
+        mat = axis_angle_mat @ mat
 
     return new_intr @ mat @ old_intr_inv
 
@@ -159,6 +177,7 @@ def preprocess_batch(
     patch_expanstion: float,
     scale_z_range: Tuple[float, float],
     scale_f_range: Tuple[float, float],
+    persp_rot_max: float,
     augmentation_flag: bool,
     device: torch.device
 ):
@@ -257,11 +276,26 @@ def preprocess_batch(
         princpt_noise = torch.randn(B, 1, 2, device=device).expand(-1, T, -1)
         princpt_noise = princpt_noise * torch.norm(princpt, dim=-1, keepdim=True) * 0.1111111
         princpt_new = princpt_noise + princpt
+        persp_dir_rad = torch.rand(B, 1, device=device).expand(-1, T) * 2 * torch.pi
+        persp_rot_rad = torch.rand(B, 1, device=device).expand(-1, T) * persp_rot_max
+        persp_axis_angle = (
+            torch.stack(
+                [
+                    torch.cos(persp_dir_rad),
+                    torch.sin(persp_dir_rad),
+                    torch.zeros(B, T, device=device),
+                ],
+                dim=-1,
+            )
+            * persp_rot_rad[..., None]
+        )
 
         # 获得数据增强变换矩阵
         # [B,T,3,3]
-        trans_3d_mat = get_trans_3d_mat(rad, scale_z)
-        trans_2d_mat = get_trans_2d_mat(rad, 1 / scale_z, focal, princpt, focal_new, princpt_new)
+        trans_3d_mat = get_trans_3d_mat(rad, scale_z, persp_axis_angle)
+        trans_2d_mat = get_trans_2d_mat(
+            rad, 1 / scale_z, focal, princpt, focal_new, princpt_new, persp_axis_angle
+        )
 
         # 带数据增强的数据规整
         # imgs_path, flip
