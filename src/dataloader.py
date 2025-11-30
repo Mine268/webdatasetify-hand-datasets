@@ -154,6 +154,8 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
     import cv2
     import smplx
 
+    os.makedirs(output_dir, exist_ok=True)
+
     # handedness
     img = cv2.cvtColor(batch["imgs"][bx][tx].permute(1, 2, 0).numpy(), cv2.COLOR_RGB2BGR)
     img1 = img.copy()
@@ -565,7 +567,8 @@ if __name__ == "__main__":
 
     loader = get_dataloader(
         glob.glob(
-            "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar"
+            # "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar"
+            "dexycb_s1_val_wds_output/*.tar"
         ),
         num_frames=7,
         stride=1,
@@ -595,7 +598,7 @@ if __name__ == "__main__":
             batch2,
             trans_2d_mat,
             f"temp_processed_{i}",
-            "/mnt/qnap/data/datasets/InterHand2.6M_5fps_batch1/images/train/",
+            "/data_1/datasets_temp/dexycb",
             10,
             0,
         )
