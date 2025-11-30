@@ -10,7 +10,8 @@ wheels/
 .venv/
 
 # model files
-models/
+models/mano/*.pkl
+models/mano/*.npz
 *.tar
 temp*/
 
