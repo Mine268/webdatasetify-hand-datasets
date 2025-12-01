@@ -235,7 +235,7 @@ def process_single_annot(sample, label, idx: int):
     return {
         "img_path": img_path, # 不需要存入最终 Tensor
         "img_bytes": img_bytes,
-        "handedness": handedness[0],
+        "handedness": handedness,
         "hand_bbox": hand_bbox,
         "joint_img": joint_img,
         "joint_hand_bbox": joint_hand_bbox,

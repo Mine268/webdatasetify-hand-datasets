@@ -15,3 +15,13 @@
 SETUP=s1 SPLIT=val python src/preprocess_DexYCB_mp.py
 SETUP=s1 SPLIT=test python src/preprocess_DexYCB_mp.py
 SETUP=s1 SPLIT=train python src/preprocess_DexYCB_mp.py
+
+SRC=dexycb_s1_train_wds_output/dexycb_s1_train-worker*.tar \
+DST=/mnt/qnap/data/datasets/webdatasets/DexYCB/s1/train/%06d.tar\
+    python src/data_reorganizer.py
+SRC=dexycb_s1_test_wds_output/dexycb_s1_test-worker*.tar \
+DST=/mnt/qnap/data/datasets/webdatasets/DexYCB/s1/test/%06d.tar\
+    python src/data_reorganizer.py
+SRC=dexycb_s1_val_wds_output/dexycb_s1_val-worker*.tar \
+DST=/mnt/qnap/data/datasets/webdatasets/DexYCB/s1/val/%06d.tar\
+    python src/data_reorganizer.py

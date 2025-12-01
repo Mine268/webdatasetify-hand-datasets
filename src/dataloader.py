@@ -568,17 +568,37 @@ if __name__ == "__main__":
     loader = get_dataloader(
         glob.glob(
             # "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar"
-            "dexycb_s1_val_wds_output/*.tar"
+            "/mnt/qnap/data/datasets/webdatasets/DexYCB/s1/train/*.tar"
         ),
-        num_frames=7,
+        num_frames=1,
         stride=1,
         batch_size=32,
-        num_workers=0,
+        num_workers=4,
     )
 
-    import os
+    # import time
+    # count = 0
+    # start_time = time.time()
+    # for i, batch_ in enumerate(tqdm(loader, ncols=70)):
+    #     batch = copy.deepcopy(batch_)
+    #     # 验证数据规整的正确性
+    #     batch2, trans_2d_mat = preprocess_batch(
+    #         batch,
+    #         [256, 256],
+    #         1.1,
+    #         [0.9, 1.1],
+    #         [0.8, 1.1],
+    #         torch.pi / 12,
+    #         True,
+    #         torch.device("cuda:0")
+    #     )
+    #     count += 1
+    # end_time = time.time()
+    # print(f"count={count}, time={end_time - start_time:.2f}s")
 
+    import os
     batch = None
+    bx, tx = 10, 0
     x = 0
     for i, batch_ in enumerate(tqdm(loader, ncols=70)):
         batch = copy.deepcopy(batch_)
@@ -599,8 +619,8 @@ if __name__ == "__main__":
             trans_2d_mat,
             f"temp_processed_{i}",
             "/data_1/datasets_temp/dexycb",
-            10,
-            0,
+            bx,
+            tx,
         )
         if not torch.all(batch2["joint_valid"][10, 0] > 0.5).item():
             print(f">> False in joint_valid, #iter={i}: {batch2['joint_valid'][10, 0]}")
@@ -609,5 +629,4 @@ if __name__ == "__main__":
             break
 
     # 直接验证数据满足一致性
-    bx, tx = 10, 0
-    verify_origin_data(batch_, "temp_origin", 10, 0)
+    verify_origin_data(batch_, "temp_origin", bx, tx)
