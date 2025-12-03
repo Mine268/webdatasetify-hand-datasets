@@ -569,7 +569,7 @@ if __name__ == "__main__":
         glob.glob(
             # "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar"
             # "/mnt/qnap/data/datasets/webdatasets/DexYCB/s1/train/*.tar"
-            "/mnt/qnap/data/datasets/webdatasets/HO3D_v3/train/*.tar"
+            "/mnt/qnap/data/datasets/webdatasets/HO3D_v3/evaluation/*.tar"
         ),
         num_frames=7,
         stride=1,
