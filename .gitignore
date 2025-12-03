@@ -12,6 +12,8 @@ wheels/
 # model files
 models/mano/*.pkl
 models/mano/*.npz
+models/mano/*.npy
+!models/mano/sh_joint_regressor.npy
 *.tar
 temp*/
 

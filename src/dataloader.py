@@ -568,12 +568,13 @@ if __name__ == "__main__":
     loader = get_dataloader(
         glob.glob(
             # "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar"
-            "/mnt/qnap/data/datasets/webdatasets/DexYCB/s1/train/*.tar"
+            # "/mnt/qnap/data/datasets/webdatasets/DexYCB/s1/train/*.tar"
+            "/mnt/qnap/data/datasets/webdatasets/HO3D_v3/train/*.tar"
         ),
-        num_frames=1,
+        num_frames=7,
         stride=1,
         batch_size=32,
-        num_workers=4,
+        num_workers=1,
     )
 
     # import time
@@ -618,7 +619,7 @@ if __name__ == "__main__":
             batch2,
             trans_2d_mat,
             f"temp_processed_{i}",
-            "/data_1/datasets_temp/dexycb",
+            "/data_1/datasets_temp/HO3D_v3",
             bx,
             tx,
         )
