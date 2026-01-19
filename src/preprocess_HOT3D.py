@@ -56,6 +56,9 @@ MAX_COUNT = 100000  # 已修改：大幅增加数量限制，让切割主要由 
 MAX_SIZE = 3 * 1024 * 1024 * 1024  # 3GB
 NUM_WORKERS = 16  # 建议设置为 CPU 核心数 - 2
 
+GAP_THRESHOLD = 1 * 1e3 * 1e3 * 1e3  # 1s
+INVALID_THRESHOLD = 16
+
 # 定义需要堆叠成 Numpy 数组的字段
 NUMPY_KEYS = [
     "hand_bbox",
@@ -92,33 +95,44 @@ def add_clip(clip, clips):
 def prepare_data():
     clips = []
     for sequence_name in os.listdir(HOT3D_ROOT):
-        if sequence_name != "assets":
-            sequence_path = os.path.join(HOT3D_ROOT, sequence_name)
+        if sequence_name == "assets":
+            continue
+        if sequence_name[:len(TRAIN_SET[0])] not in TRAIN_SET:
+            continue
 
-            # 初始化data_provider
-            hot3d_data_provider = Hot3dDataProvider(
-                sequence_folder=sequence_path,
-                object_library=None,
-                mano_hand_model=mano_hand_model,
-            )
-            device_data_provider = (
-                hot3d_data_provider.device_data_provider
-            )  # 图像数据、设备标定信息
-            device_pose_provider = (
-                hot3d_data_provider.device_pose_data_provider
-            )  # 相机姿态
-            hand_data_provider = hot3d_data_provider.mano_hand_data_provider  # 手部数据
-            timestamps = (
-                device_data_provider.get_sequence_timestamps()
-            )  # 时间戳，ns，不连续（对应每帧的timestamp？）
-            stream_id = StreamId("214-1")  # 使用RGB相机的数据流
+        sequence_path = os.path.join(HOT3D_ROOT, sequence_name)
 
-            if device_pose_provider is None or hand_data_provider is None:
-                continue  # 整个序列都无效
+        # 初始化data_provider
+        hot3d_data_provider = Hot3dDataProvider(
+            sequence_folder=sequence_path,
+            object_library=None,
+            mano_hand_model=mano_hand_model,
+        )
+        device_data_provider = (
+            hot3d_data_provider.device_data_provider
+        )  # 图像数据、设备标定信息
+        device_pose_provider = (
+            hot3d_data_provider.device_pose_data_provider
+        )  # 相机姿态
+        hand_data_provider = hot3d_data_provider.mano_hand_data_provider  # 手部数据
+        timestamps = (
+            device_data_provider.get_sequence_timestamps()
+        )  # 时间戳，ns，不连续（对应每帧的timestamp？）
+        stream_id = StreamId("214-1")  # 使用RGB相机的数据流
 
-            clip_rh = []
-            clip_lh = []
-            for timestamp_ns in tqdm(timestamps):
+        if device_pose_provider is None or hand_data_provider is None:
+            continue  # 整个序列都无效
+
+        for handedness in ["right", "left"]:
+            prev_ts_ns = None
+            curr_clip = []
+            for timestamp_ns in tqdm(timestamps, ncols=50):
+                if prev_ts_ns is not None and timestamp_ns - prev_ts_ns >= GAP_THRESHOLD:
+                    if curr_clip != []:
+                        clips.append(curr_clip.copy())
+                    prev_ts_ns = timestamp_ns
+                    curr_clip.clear()
+
                 # 加载当前帧相机姿态
                 headset_pose3d_with_dt = None
                 headset_pose3d = None
@@ -131,8 +145,6 @@ def prepare_data():
                     headset_pose3d_with_dt is None
                     or headset_pose3d_with_dt.pose3d is None
                 ):
-                    add_clip(clip_lh, clips)
-                    add_clip(clip_rh, clips)
                     continue
                 headset_pose3d = headset_pose3d_with_dt.pose3d
 
@@ -148,8 +160,6 @@ def prepare_data():
                     hand_poses_with_dt is None
                     or hand_poses_with_dt.pose3d_collection is None
                 ):
-                    add_clip(clip_lh, clips)
-                    add_clip(clip_rh, clips)
                     continue
                 hand_data = hand_poses_with_dt.pose3d_collection
 
@@ -165,99 +175,98 @@ def prepare_data():
                 princpt = linear_camera_intrinsic.get_principal_point()
 
                 # 单手数据
-                for hand_pose_data in hand_data.poses.values():
-                    invalid_landmarks = False  # 当前帧有效
-                    handedness = hand_pose_data.handedness_label()  # 手性，left/right
-                    landmarks_world = hand_data_provider.get_hand_landmarks(
-                        hand_pose_data
-                    )  # 关键点（世界，m）
-                    landmarks_world = landmarks_world.squeeze(0).numpy()
+                handedness_key = Handedness.Right if handedness == "right" else Handedness.Left
+                if handedness_key not in hand_data.poses:
+                    continue
+                hand_pose_data = hand_data.poses[handedness_key]
+                landmarks_world = hand_data_provider.get_hand_landmarks(
+                    hand_pose_data
+                )  # 关键点（世界，m）
+                landmarks_world = landmarks_world.squeeze(0).numpy()
 
-                    joint_img = []
-                    joint_cam = []
-                    for landmark_world in landmarks_world:
-                        landmark_cam = T_world_camera.inverse() @ landmark_world
-                        landmark_2d = linear_camera_intrinsic.project(landmark_cam)
-                        if landmark_2d is not None:
-                            joint_img.append(landmark_2d)
-                            joint_cam.append(landmark_cam)
-                        else:  # 如果有一个为空（不在图像内），就算无效
-                            invalid_landmarks = True
-                            break
+                # 过滤无效标注，如果落在图像中的点太少，则认为标注无效
+                invalid_count = sum(
+                    int(linear_camera_intrinsic.project(T_world_camera.inverse() @ x) is None)
+                    for x in landmarks_world
+                )
+                if invalid_count >= INVALID_THRESHOLD:
+                    continue
 
-                    if invalid_landmarks:
-                        if handedness == "left":
-                            add_clip(clip_lh, clips)
-                        else:
-                            add_clip(clip_rh, clips)
-                        continue
+                joint_cam = landmarks_world
+                joint_cam_mm = joint_cam * 1000.0  # m -> mm
 
-                    joint_cam = np.asarray(joint_cam)
-                    joint_cam = np.squeeze(joint_cam, axis=-1)
-                    joint_cam_mm = joint_cam * 1000.0  # m -> mm
+                # HOT3D 没有 thumb1 关键点
+                # 将 wrist 和 thumb2 的中点作为 thumb1
+                thumb1_cam_mm = (joint_cam_mm[5] + joint_cam_mm[6]) / 2
+                joint_cam_mm = np.concatenate(
+                    [joint_cam_mm, thumb1_cam_mm[np.newaxis, :]], axis=0
+                )
 
-                    # HOT3D 没有 thumb1 关键点
-                    # 将 wrist 和 thumb2 的中点作为 thumb1
-                    thumb1_cam_mm = (joint_cam_mm[5] + joint_cam_mm[6]) / 2
-                    joint_cam_mm = np.concatenate(
-                        [joint_cam_mm, thumb1_cam_mm[np.newaxis, :]], axis=0
-                    )
+                # 手动投影
+                extr = T_world_camera.inverse().to_matrix().T
+                joint_cam_homo = np.concatenate(
+                    [joint_cam, np.ones_like(joint_cam[:, :1])], axis=-1
+                )
+                joint_cam_homo = joint_cam_homo @ extr
+                joint_cam = joint_cam_homo[..., :-1] / joint_cam_homo[..., -1:]
+                u = focal[0] * joint_cam[..., 0] / joint_cam[..., 2] + princpt[0]
+                v = focal[1] * joint_cam[..., 1] / joint_cam[..., 2] + princpt[1]
 
-                    joint_img = np.array(joint_img)  # (J, 2) 关键点投影
-                    thumb1_joint_img = (joint_img[5] + joint_img[6]) / 2
-                    joint_img = np.concatenate(
-                        [joint_img, thumb1_joint_img[np.newaxis, :]], axis=0
-                    )
+                joint_img = np.stack([u, v], axis=-1) # [j,2]
+                thumb1_joint_img = (joint_img[5] + joint_img[6]) / 2
+                joint_img = np.concatenate(
+                    [joint_img, thumb1_joint_img[np.newaxis, :]], axis=0
+                )
 
-                    xmin, ymin = joint_img.min(axis=0)
-                    xmax, ymax = joint_img.max(axis=0)
-                    hand_bbox = np.array(
-                        [xmin, ymin, xmax, ymax], dtype=np.float32
-                    )  # 包围盒
+                # 包围盒
+                xmin, ymin = joint_img.min(axis=0)
+                xmax, ymax = joint_img.max(axis=0)
+                hand_bbox = np.array(
+                    [xmin, ymin, xmax, ymax], dtype=np.float32
+                )
 
-                    T_world_wrist = hand_pose_data.wrist_pose
-                    T_camera_wrist = T_world_camera.inverse() @ T_world_wrist
-                    wrist_rot_mat = T_camera_wrist.to_matrix()[:3, :3]
-                    root_axis_angle = matrix_to_axis_angle(
-                        torch.from_numpy(wrist_rot_mat)
-                    ).numpy()
-                    pca_pose = np.array(hand_pose_data.joint_angles)  # (15,)
-                    num_pose_coeffs = pca_pose.shape[0]
-                    axis_angle = (
-                        pca_pose @ mano_pca_comps[handedness][:num_pose_coeffs]
-                    )  # (45,)
-                    mano_pose = np.concatenate([root_axis_angle, axis_angle])
-                    mano_shape = hand_data_provider._mano_shape_params
-                    mano_valid = True
+                T_world_wrist = hand_pose_data.wrist_pose
+                T_camera_wrist = T_world_camera.inverse() @ T_world_wrist
+                wrist_rot_mat = T_camera_wrist.to_matrix()[:3, :3]
+                root_axis_angle = matrix_to_axis_angle(
+                    torch.from_numpy(wrist_rot_mat)
+                ).numpy()
+                pca_pose = np.array(hand_pose_data.joint_angles)  # (15,)
+                num_pose_coeffs = pca_pose.shape[0]
+                axis_angle = (
+                    pca_pose @ mano_pca_comps[handedness][:num_pose_coeffs]
+                )  # (45,)
+                mano_pose = np.concatenate([root_axis_angle, axis_angle])
+                mano_shape = hand_data_provider._mano_shape_params
+                mano_valid = True
 
-                    frame = {
-                        "sequence_name": sequence_name,
-                        "timestamp_ns": timestamp_ns,
-                        "handedness": handedness,  # flip？
-                        # 3D信息
-                        "joint_cam": joint_cam_mm,  # (J,3), 单位 mm
-                        "joint_rel": joint_cam_mm - joint_cam_mm[5],
-                        # 2D信息（正畸）
-                        "joint_img": joint_img,  # (J,2)
-                        "bbox_tight": hand_bbox,  # (4,)
-                        "joint_bbox_img": joint_img - hand_bbox[:2],
-                        # MANO信息
-                        "mano_pose": mano_pose,
-                        "mano_shape": mano_shape,
-                        "mano_valid": mano_valid,
-                        # 内参（正畸）
-                        "focal": focal,
-                        "princpt": princpt,
-                    }
+                frame = {
+                    "sequence_name": sequence_name,
+                    "timestamp_ns": timestamp_ns,
+                    "handedness": handedness,  # flip？
+                    # 3D信息
+                    "joint_cam": joint_cam_mm,  # (J,3), 单位 mm
+                    "joint_rel": joint_cam_mm - joint_cam_mm[5],
+                    # 2D信息（正畸）
+                    "joint_img": joint_img,  # (J,2)
+                    "bbox_tight": hand_bbox,  # (4,)
+                    "joint_bbox_img": joint_img - hand_bbox[:2],
+                    # MANO信息
+                    "mano_pose": mano_pose,
+                    "mano_shape": mano_shape,
+                    "mano_valid": mano_valid,
+                    # 内参（正畸）
+                    "focal": focal,
+                    "princpt": princpt,
+                }
 
-                    if handedness == "left":  # 有效信息
-                        clip_lh.append(frame)
-                    else:
-                        clip_rh.append(frame)
+                curr_clip.append(frame)
+                prev_ts_ns = timestamp_ns
 
-            add_clip(clip_lh, clips)
-            add_clip(clip_rh, clips)
-            break  # TEST
+            if curr_clip != []:
+                clips.append(curr_clip)
+
+        break
 
     return clips
 
