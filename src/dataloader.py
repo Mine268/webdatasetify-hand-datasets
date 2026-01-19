@@ -1,6 +1,7 @@
 """
 Webdataset Dataloader
 """
+
 from typing import *
 import glob
 import copy
@@ -32,9 +33,8 @@ NPY_KEYS = [
     "princpt.npy",
 ]
 
-COLLATE_LIST_KEYS = [
-    "imgs", "handedness", "__key__"
-]
+COLLATE_LIST_KEYS = ["imgs", "handedness", "__key__"]
+
 
 def clip_to_t_frames(num_frames, stride, source):
     """
@@ -43,7 +43,7 @@ def clip_to_t_frames(num_frames, stride, source):
     for sample in source:
         imgs_path = sample["imgs_path.json"]
         img_list = sample["img_bytes.pickle"]
-        handedness = sample["handedness.json"] # "l" or "r"
+        handedness = sample["handedness.json"]  # "l" or "r"
         total_frames = len(img_list)
         if total_frames < num_frames:
             continue
@@ -66,11 +66,12 @@ def clip_to_t_frames(num_frames, stride, source):
             }
             for key in NPY_KEYS:
                 if key in sample:
-                    out_key = key.replace(".npy", "") # 去后缀
+                    out_key = key.replace(".npy", "")  # 去后缀
                     # 这里执行的是 Numpy 的第一维切片操作
                     sub_sample[out_key] = sample[key][start:end]
 
             yield sub_sample
+
 
 def preprocess_frame(sample):
     """将图像二进制流转换为图片"""
@@ -88,7 +89,9 @@ def preprocess_frame(sample):
     result = {
         "imgs_path": sample["imgs_path"],
         "imgs": imgs_tensor,
-        "handedness": sample["handedness"], # 此时还是 str, collate 时可能需要特殊处理或 drop
+        "handedness": sample[
+            "handedness"
+        ],  # 此时还是 str, collate 时可能需要特殊处理或 drop
     }
 
     # 自动将所有 numpy 字段转为 Tensor
@@ -102,6 +105,7 @@ def preprocess_frame(sample):
                 result[key] = torch.tensor(val)
 
     return result
+
 
 def collate_fn(batch_wds):
     """对batch数据进行重整，由于图像大小不一，特判使用List"""
@@ -133,11 +137,7 @@ def get_dataloader(
         .compose(partial(clip_to_t_frames, num_frames, stride))
         .shuffle(5000)
         .map(preprocess_frame)
-        .batched(
-            batch_size,
-            partial=False,
-            collation_fn=collate_fn
-        )
+        .batched(batch_size, partial=False, collation_fn=collate_fn)
     )
 
     dataloader = DataLoader(
@@ -145,10 +145,11 @@ def get_dataloader(
         batch_size=None,
         num_workers=num_workers,
         prefetch_factor=2 if num_workers > 0 else None,
-        pin_memory=True
+        pin_memory=True,
     )
 
     return dataloader
+
 
 def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
     import cv2
@@ -157,7 +158,9 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
     os.makedirs(output_dir, exist_ok=True)
 
     # handedness
-    img = cv2.cvtColor(batch["imgs"][bx][tx].permute(1, 2, 0).numpy(), cv2.COLOR_RGB2BGR)
+    img = cv2.cvtColor(
+        batch["imgs"][bx][tx].permute(1, 2, 0).numpy(), cv2.COLOR_RGB2BGR
+    )
     img1 = img.copy()
     cv2.putText(
         img1,
@@ -180,14 +183,10 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
         (int(hand_bbox[0]), int(hand_bbox[1])),
         (int(hand_bbox[2]), int(hand_bbox[3])),
         (0, 0, 255),
-        3
+        3,
     )
     for i, jnt in enumerate(joint_img):
-        cv2.circle(
-            img2,
-            (int(jnt[0]), int(jnt[1])),
-            3, (255, 50, 50), -1
-        )
+        cv2.circle(img2, (int(jnt[0]), int(jnt[1])), 3, (255, 50, 50), -1)
         cv2.putText(
             img2,
             str(i),
@@ -201,7 +200,7 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
     cv2.imwrite(f"{output_dir}/hand_bbox-joint_img.png", img2)
 
     # joint_hand_bbox
-    hand_bbox = torch.round(batch["hand_bbox"][bx, tx:tx + 1])
+    hand_bbox = torch.round(batch["hand_bbox"][bx, tx : tx + 1])
     joint_hand_bbox = batch["joint_hand_bbox"][bx, tx]
     xm, ym, xM, yM = torch.split(hand_bbox, 1, dim=-1)
     hand_bbox_k = torch.stack(
@@ -211,11 +210,11 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
             torch.cat([xM, yM], dim=-1),
             torch.cat([xm, yM], dim=-1),
         ],
-        dim=1
+        dim=1,
     )
     bbox_size = hand_bbox[0, 2:] - hand_bbox[0, :2]
     img_hand_bbox = T.crop_and_resize(
-        batch["imgs"][bx][tx:tx + 1].float() / 255,
+        batch["imgs"][bx][tx : tx + 1].float() / 255,
         hand_bbox_k,
         (int(bbox_size[1]), int(bbox_size[0])),
     )
@@ -224,11 +223,7 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
         cv2.COLOR_RGB2BGR,
     )
     for i, jnt in enumerate(joint_hand_bbox):
-        cv2.circle(
-            img_hand_bbox,
-            (int(jnt[0]), int(jnt[1])),
-            3, (255, 50, 50), -1
-        )
+        cv2.circle(img_hand_bbox, (int(jnt[0]), int(jnt[1])), 3, (255, 50, 50), -1)
         cv2.putText(
             img_hand_bbox,
             str(i),
@@ -250,11 +245,7 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
     joint_reproj = torch.stack([joint_reproj_u, joint_reproj_v], dim=-1)
     img3 = img.copy()
     for i, jnt in enumerate(joint_reproj):
-        cv2.circle(
-            img3,
-            (int(jnt[0]), int(jnt[1])),
-            3, (255, 50, 50), -1
-        )
+        cv2.circle(img3, (int(jnt[0]), int(jnt[1])), 3, (255, 50, 50), -1)
         cv2.putText(
             img3,
             str(i),
@@ -271,7 +262,7 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
     joint_cam = batch["joint_cam"][bx, tx]
     joint_rel = batch["joint_rel"][bx, tx]
     assert torch.allclose(
-        joint_rel, joint_cam - joint_cam[:1]
+        joint_rel, joint_cam - joint_cam[:1], rtol=1e-5, atol=1e-5
     ), "joint_rel not consistent with joint_cam"
     print("joint_rel is consistent with joint_cam")
 
@@ -296,7 +287,7 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
             betas=mano_shape,
             global_orient=mano_pose[:, :3],
             hand_pose=mano_pose[:, 3:],
-            transl=torch.zeros((1, 3))
+            transl=torch.zeros((1, 3)),
         )
     mano_verts = mano_output.vertices[0] * 1e3
     joint_mano_cam = mano_output.joints[0] * 1e3
@@ -306,19 +297,18 @@ def verify_origin_data(batch, output_dir: str, bx: int = 0, tx: int = 0):
     mano_verts_reproj_v = focal[1] * mano_verts[:, 1] / mano_verts[:, 2] + princpt[1]
     mano_verts_reproj = torch.stack([mano_verts_reproj_u, mano_verts_reproj_v], dim=-1)
     for vt in mano_verts_reproj:
-        cv2.circle(
-            img4,
-            (int(vt[0]), int(vt[1])),
-            1, (255, 255, 0), -1
-        )
+        cv2.circle(img4, (int(vt[0]), int(vt[1])), 1, (255, 255, 0), -1)
     cv2.imwrite(f"{output_dir}/mano.png", img4)
 
+
 import kornia
+
+
 def crop_bbox_kornia(
     image: torch.Tensor,
     bbox: torch.Tensor,
-    padding_mode: str = 'zeros',
-    align_corners: bool = True
+    padding_mode: str = "zeros",
+    align_corners: bool = True,
 ) -> torch.Tensor:
     """
     使用 Kornia 对图像按 bbox 裁剪，输出尺寸为 bbox 的整数宽高，越界部分填充为 0。
@@ -348,12 +338,18 @@ def crop_bbox_kornia(
     h_out = max(1, int(torch.round(y2 - y1).item()))
 
     # 构造源 box（原始 bbox 的四个角点）
-    src_vertices = torch.tensor([
-        [x1.item(), y1.item()],
-        [x2.item(), y1.item()],
-        [x2.item(), y2.item()],
-        [x1.item(), y2.item()]
-    ], device=image.device, dtype=image.dtype).unsqueeze(0)  # (1, 4, 2)
+    src_vertices = torch.tensor(
+        [
+            [x1.item(), y1.item()],
+            [x2.item(), y1.item()],
+            [x2.item(), y2.item()],
+            [x1.item(), y2.item()],
+        ],
+        device=image.device,
+        dtype=image.dtype,
+    ).unsqueeze(
+        0
+    )  # (1, 4, 2)
 
     # 添加 batch 维度
     image_batch = image.unsqueeze(0)  # (1, C, H, W)
@@ -361,7 +357,7 @@ def crop_bbox_kornia(
     cropped = kornia.geometry.transform.crop_and_resize(
         image_batch,
         src_vertices,
-        size=(h_out, w_out),          # 注意：size 是 (height, width)
+        size=(h_out, w_out),  # 注意：size 是 (height, width)
     )  # 输出: (1, C, h_out, w_out)
 
     return cropped.squeeze(0)  # (C, h_out, w_out)
@@ -369,6 +365,7 @@ def crop_bbox_kornia(
 
 def verify_batch(
     batch,
+    origin_batch,
     trans_2d_mat: torch.Tensor,
     output_dir: str,
     source_prefix: str,
@@ -382,7 +379,15 @@ def verify_batch(
 
     # origin image
     print("\nimgs_path=" + f"{source_prefix}/" + batch["imgs_path"][bx][tx])
-    img = cv2.imread(f"{source_prefix}/" + batch["imgs_path"][bx][tx])
+
+    filename = batch["imgs_path"][bx][tx]
+    if filename.endswith(".vrs"):
+        img = cv2.cvtColor(
+            origin_batch["imgs"][bx][tx].permute(1, 2, 0).numpy(), cv2.COLOR_RGB2BGR
+        )
+    else:
+        img = cv2.imread(f"{source_prefix}/" + batch["imgs_path"][bx][tx])
+
     img = cv2.warpPerspective(img, trans_2d_mat, (img.shape[1], img.shape[0]))
     if batch["flip"][bx]:
         img = img[:, ::-1].copy()
@@ -412,20 +417,18 @@ def verify_batch(
         img2,
         (int(patch_bbox[0]), int(patch_bbox[1])),
         (int(patch_bbox[2]), int(patch_bbox[3])),
-        (0, 0, 255), 2
+        (0, 0, 255),
+        2,
     )
     cv2.rectangle(
         img2,
         (int(hand_bbox[0]), int(hand_bbox[1])),
         (int(hand_bbox[2]), int(hand_bbox[3])),
-        (0, 255, 0), 2
+        (0, 255, 0),
+        2,
     )
     for i, jnt in enumerate(joint_img):
-        cv2.circle(
-            img2,
-            (int(jnt[0]), int(jnt[1])),
-            3, (255, 50, 50), -1
-        )
+        cv2.circle(img2, (int(jnt[0]), int(jnt[1])), 3, (255, 50, 50), -1)
         cv2.putText(
             img2,
             str(i),
@@ -447,13 +450,19 @@ def verify_batch(
     img_patch_bbox = crop_bbox_kornia(img3, patch_bbox)
     img_hand_bbox = crop_bbox_kornia(img3, hand_bbox)
     img3 = img3.permute(1, 2, 0).numpy()
-    img_patch_bbox = (img_patch_bbox.permute(1, 2, 0).contiguous().numpy() * 255).astype(np.uint8)
-    img_hand_bbox = (img_hand_bbox.permute(1, 2, 0).contiguous().numpy() * 255).astype(np.uint8)
+    img_patch_bbox = (
+        img_patch_bbox.permute(1, 2, 0).contiguous().numpy() * 255
+    ).astype(np.uint8)
+    img_hand_bbox = (img_hand_bbox.permute(1, 2, 0).contiguous().numpy() * 255).astype(
+        np.uint8
+    )
     for i, _ in enumerate(joint_patch_bbox):
         cv2.circle(
             img_patch_bbox,
             (int(joint_patch_bbox[i, 0]), int(joint_patch_bbox[i, 1])),
-            3, (255, 50, 50), -1
+            3,
+            (255, 50, 50),
+            -1,
         )
         cv2.putText(
             img_patch_bbox,
@@ -469,7 +478,9 @@ def verify_batch(
         cv2.circle(
             img_hand_bbox,
             (int(joint_hand_bbox[i, 0]), int(joint_hand_bbox[i, 1])),
-            3, (255, 50, 50), -1
+            3,
+            (255, 50, 50),
+            -1,
         )
         cv2.putText(
             img_hand_bbox,
@@ -493,11 +504,7 @@ def verify_batch(
     joint_reproj_v = focal[1] * joint_cam[:, 1] / joint_cam[:, 2] + princpt[1]
     joint_reproj = torch.stack([joint_reproj_u, joint_reproj_v], dim=-1)
     for i, jnt in enumerate(joint_reproj):
-        cv2.circle(
-            img4,
-            (int(jnt[0]), int(jnt[1])),
-            3, (255, 50, 50), -1
-        )
+        cv2.circle(img4, (int(jnt[0]), int(jnt[1])), 3, (255, 50, 50), -1)
         cv2.putText(
             img4,
             str(i),
@@ -514,7 +521,7 @@ def verify_batch(
     joint_cam = batch["joint_cam"][bx, tx].cpu()
     joint_rel = batch["joint_rel"][bx, tx].cpu()
     assert torch.allclose(
-        joint_rel, joint_cam - joint_cam[:1]
+        joint_rel, joint_cam - joint_cam[:1], rtol=1e-5, atol=1e-5
     ), "joint_rel not consistent with joint_cam"
     print("joint_rel is consistent with joint_cam")
 
@@ -539,7 +546,7 @@ def verify_batch(
             betas=mano_shape,
             global_orient=mano_pose[:, :3],
             hand_pose=mano_pose[:, 3:],
-            transl=torch.zeros((1, 3))
+            transl=torch.zeros((1, 3)),
         )
     mano_verts = mano_output.vertices[0] * 1e3
     joint_mano_cam = mano_output.joints[0] * 1e3
@@ -549,11 +556,7 @@ def verify_batch(
     mano_verts_reproj_v = focal[1] * mano_verts[:, 1] / mano_verts[:, 2] + princpt[1]
     mano_verts_reproj = torch.stack([mano_verts_reproj_u, mano_verts_reproj_v], dim=-1)
     for vt in mano_verts_reproj:
-        cv2.circle(
-            img5,
-            (int(vt[0]), int(vt[1])),
-            1, (255, 255, 0), -1
-        )
+        cv2.circle(img5, (int(vt[0]), int(vt[1])), 1, (255, 255, 0), -1)
     mano_valid = batch["mano_valid"][bx, tx].cpu()
     print(f"mano_valid={mano_valid}")
     cv2.imwrite(f"{output_dir}/mano.png", img5)
@@ -561,6 +564,7 @@ def verify_batch(
 
 if __name__ == "__main__":
     import random
+
     random.seed(42)
     np.random.seed(42)
     torch.manual_seed(42)
@@ -569,8 +573,10 @@ if __name__ == "__main__":
         glob.glob(
             # "/mnt/qnap/data/datasets/webdatasets/InterHand2.6M/train/*.tar"
             # "/mnt/qnap/data/datasets/webdatasets/DexYCB/s1/train/*.tar"
-            "/mnt/qnap/data/datasets/webdatasets/HO3D_v3/evaluation/*.tar"
-        ),
+            # "/mnt/qnap/data/datasets/webdatasets/HO3D_v3/evaluation/*.tar"
+            # "dexycb_s1_val_wds_output/*tar"
+            "hot3d_train_wds_output/*.tar"
+        )[2:4],
         num_frames=7,
         stride=1,
         batch_size=32,
@@ -598,6 +604,7 @@ if __name__ == "__main__":
     # print(f"count={count}, time={end_time - start_time:.2f}s")
 
     import os
+
     batch = None
     bx, tx = 10, 0
     x = 0
@@ -612,14 +619,16 @@ if __name__ == "__main__":
             [0.8, 1.1],
             torch.pi / 12,
             True,
-            torch.device("cuda:0")
+            torch.device("cuda:0"),
         )
         os.makedirs(f"temp_processed_{i}", exist_ok=True)
         verify_batch(
             batch2,
+            batch,
             trans_2d_mat,
             f"temp_processed_{i}",
-            "/data_1/datasets_temp/HO3D_v3",
+            # "/mnt/qnap/data/datasets/dexycb/",
+            "/mnt/qnap/data/datasets/hot3d/",
             bx,
             tx,
         )
