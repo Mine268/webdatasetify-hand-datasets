@@ -576,8 +576,8 @@ if __name__ == "__main__":
             # "/mnt/qnap/data/datasets/webdatasets/HO3D_v3/evaluation/*.tar"
             # "dexycb_s1_val_wds_output/*tar"
             "hot3d_train_wds_output/*.tar"
-        )[2:4],
-        num_frames=7,
+        ),
+        num_frames=1,
         stride=1,
         batch_size=32,
         num_workers=1,
@@ -608,6 +608,10 @@ if __name__ == "__main__":
     batch = None
     bx, tx = 10, 0
     x = 0
+
+    batch_ = next(iter(loader))
+    verify_origin_data(batch_, "temp_origin", bx, tx)
+
     for i, batch_ in enumerate(tqdm(loader, ncols=70)):
         batch = copy.deepcopy(batch_)
         # 验证数据规整的正确性
@@ -637,6 +641,3 @@ if __name__ == "__main__":
         x += 1
         if x > 10:
             break
-
-    # 直接验证数据满足一致性
-    verify_origin_data(batch_, "temp_origin", bx, tx)

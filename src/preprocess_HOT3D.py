@@ -54,10 +54,10 @@ TEST_SET = ["P0004", "P0005", "P0006", "P0008", "P0016", "P0020"]
 OUTPUT_PATTERN = f"hot3d_{SPLIT}_wds_output/hot3d_{SPLIT}-worker{{worker_id}}-%06d.tar"
 MAX_COUNT = 100000  # 已修改：大幅增加数量限制，让切割主要由 MAX_SIZE 决定
 MAX_SIZE = 3 * 1024 * 1024 * 1024  # 3GB
-NUM_WORKERS = 16  # 建议设置为 CPU 核心数 - 2
+NUM_WORKERS = 32  # 建议设置为 CPU 核心数 - 2
 
 GAP_THRESHOLD = 1 * 1e3 * 1e3 * 1e3  # 1s
-INVALID_THRESHOLD = 16
+INVALID_THRESHOLD = 10
 
 # 定义需要堆叠成 Numpy 数组的字段
 NUMPY_KEYS = [
@@ -94,6 +94,7 @@ def add_clip(clip, clips):
 
 def prepare_data():
     clips = []
+    skipping = []
     for sequence_name in os.listdir(HOT3D_ROOT):
         if sequence_name == "assets":
             continue
@@ -133,46 +134,55 @@ def prepare_data():
                     prev_ts_ns = timestamp_ns
                     curr_clip.clear()
 
-                # 加载当前帧相机姿态
-                headset_pose3d_with_dt = None
-                headset_pose3d = None
-                headset_pose3d_with_dt = device_pose_provider.get_pose_at_timestamp(
-                    timestamp_ns=timestamp_ns,
-                    time_query_options=TimeQueryOptions.CLOSEST,
-                    time_domain=TimeDomain.TIME_CODE,
-                )
-                if (
-                    headset_pose3d_with_dt is None
-                    or headset_pose3d_with_dt.pose3d is None
-                ):
-                    continue
-                headset_pose3d = headset_pose3d_with_dt.pose3d
-
-                # 加载当前帧手部姿态
-                hand_poses_with_dt = None
-                hand_data = None
-                hand_poses_with_dt = hand_data_provider.get_pose_at_timestamp(
-                    timestamp_ns=timestamp_ns,
-                    time_query_options=TimeQueryOptions.CLOSEST,
-                    time_domain=TimeDomain.TIME_CODE,
-                )
-                if (
-                    hand_poses_with_dt is None
-                    or hand_poses_with_dt.pose3d_collection is None
-                ):
-                    continue
-                hand_data = hand_poses_with_dt.pose3d_collection
-
-                # 处理手部姿态
-                # 相机参数
-                [T_device_camera, linear_camera_intrinsic] = (
-                    device_data_provider.get_online_camera_calibration(
-                        stream_id, timestamp_ns, camera_model=LINEAR
+                try:
+                    # 加载当前帧相机姿态
+                    headset_pose3d_with_dt = None
+                    headset_pose3d = None
+                    headset_pose3d_with_dt = device_pose_provider.get_pose_at_timestamp(
+                        timestamp_ns=timestamp_ns,
+                        time_query_options=TimeQueryOptions.CLOSEST,
+                        time_domain=TimeDomain.TIME_CODE,
                     )
-                )
-                T_world_camera = headset_pose3d.T_world_device @ T_device_camera
-                focal = linear_camera_intrinsic.get_focal_lengths()
-                princpt = linear_camera_intrinsic.get_principal_point()
+                    if (
+                        headset_pose3d_with_dt is None
+                        or headset_pose3d_with_dt.pose3d is None
+                    ):
+                        continue
+                    headset_pose3d = headset_pose3d_with_dt.pose3d
+
+                    # 加载当前帧手部姿态
+                    hand_poses_with_dt = None
+                    hand_data = None
+                    hand_poses_with_dt = hand_data_provider.get_pose_at_timestamp(
+                        timestamp_ns=timestamp_ns,
+                        time_query_options=TimeQueryOptions.CLOSEST,
+                        time_domain=TimeDomain.TIME_CODE,
+                    )
+                    if (
+                        hand_poses_with_dt is None
+                        or hand_poses_with_dt.pose3d_collection is None
+                    ):
+                        continue
+                    hand_data = hand_poses_with_dt.pose3d_collection
+
+                    # 处理手部姿态
+                    # 相机参数
+                    [T_device_camera, linear_camera_intrinsic] = (
+                        device_data_provider.get_online_camera_calibration(
+                            stream_id, timestamp_ns, camera_model=LINEAR
+                        )
+                    )
+                    T_world_camera = headset_pose3d.T_world_device @ T_device_camera
+                    focal = linear_camera_intrinsic.get_focal_lengths()
+                    princpt = linear_camera_intrinsic.get_principal_point()
+                except Exception as ex:
+                    print(
+                        "!!! error: {}, {}, {}, {}".format(
+                            sequence_name, handedness, timestamp_ns, ex
+                        )
+                    )
+                    skipping.append((sequence_name, handedness))
+                    continue
 
                 # 单手数据
                 handedness_key = Handedness.Right if handedness == "right" else Handedness.Left
@@ -193,13 +203,13 @@ def prepare_data():
                     continue
 
                 joint_cam = landmarks_world
-                joint_cam_mm = joint_cam * 1000.0  # m -> mm
+                # joint_cam = joint_cam * 1000.0  # m -> mm
 
                 # HOT3D 没有 thumb1 关键点
                 # 将 wrist 和 thumb2 的中点作为 thumb1
-                thumb1_cam_mm = (joint_cam_mm[5] + joint_cam_mm[6]) / 2
-                joint_cam_mm = np.concatenate(
-                    [joint_cam_mm, thumb1_cam_mm[np.newaxis, :]], axis=0
+                thumb1_cam_mm = (joint_cam[5] + joint_cam[6]) / 2
+                joint_cam = np.concatenate(
+                    [joint_cam, thumb1_cam_mm[np.newaxis, :]], axis=0
                 )
 
                 # 手动投影
@@ -240,13 +250,16 @@ def prepare_data():
                 mano_shape = hand_data_provider._mano_shape_params
                 mano_valid = True
 
+                # joint_cam to mm
+                joint_cam = joint_cam * 1000.0
+
                 frame = {
                     "sequence_name": sequence_name,
                     "timestamp_ns": timestamp_ns,
                     "handedness": handedness,  # flip？
                     # 3D信息
-                    "joint_cam": joint_cam_mm,  # (J,3), 单位 mm
-                    "joint_rel": joint_cam_mm - joint_cam_mm[5],
+                    "joint_cam": joint_cam,  # (J,3), 单位 mm
+                    "joint_rel": joint_cam - joint_cam[5],
                     # 2D信息（正畸）
                     "joint_img": joint_img,  # (J,2)
                     "bbox_tight": hand_bbox,  # (4,)
@@ -266,7 +279,8 @@ def prepare_data():
             if curr_clip != []:
                 clips.append(curr_clip)
 
-        break
+    print(f"#skipping: {len(skipping)}")
+    print(f"skipping: {skipping}")
 
     return clips
 
