@@ -54,7 +54,7 @@ TEST_SET = ["P0004", "P0005", "P0006", "P0008", "P0016", "P0020"]
 OUTPUT_PATTERN = f"hot3d_{SPLIT}_wds_output/hot3d_{SPLIT}-worker{{worker_id}}-%06d.tar"
 MAX_COUNT = 100000  # 已修改：大幅增加数量限制，让切割主要由 MAX_SIZE 决定
 MAX_SIZE = 3 * 1024 * 1024 * 1024  # 3GB
-NUM_WORKERS = 32  # 建议设置为 CPU 核心数 - 2
+NUM_WORKERS = 8  # 建议设置为 CPU 核心数 - 2
 
 GAP_THRESHOLD = 1 * 1e3 * 1e3 * 1e3  # 1s
 INVALID_THRESHOLD = 10
@@ -354,7 +354,7 @@ def process_single_annot(sample, idx: int, device_data_provider):
         "mano_pose": mano_pose,
         "mano_shape": mano_shape,
         "mano_valid": mano_valid,
-        "timestamp": timestamp,
+        "timestamp": timestamp / 1e6, # ns -> ms
         "focal": focal,
         "princpt": princpt,
     }
