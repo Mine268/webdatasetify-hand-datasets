@@ -95,10 +95,14 @@ def add_clip(clip, clips):
 def prepare_data():
     clips = []
     skipping = []
+    
+    # 根据 SPLIT 选择要处理的序列集合
+    target_set = TRAIN_SET if SPLIT == "train" else TEST_SET
+    
     for sequence_name in os.listdir(HOT3D_ROOT):
         if sequence_name == "assets":
             continue
-        if sequence_name[:len(TRAIN_SET[0])] not in TRAIN_SET:
+        if sequence_name.split("_")[0] not in target_set:
             continue
 
         sequence_path = os.path.join(HOT3D_ROOT, sequence_name)
@@ -122,6 +126,7 @@ def prepare_data():
         stream_id = StreamId("214-1")  # 使用RGB相机的数据流
 
         if device_pose_provider is None or hand_data_provider is None:
+            print("The entire seq is invalid, skip")
             continue  # 整个序列都无效
 
         for handedness in ["right", "left"]:
@@ -147,6 +152,7 @@ def prepare_data():
                         headset_pose3d_with_dt is None
                         or headset_pose3d_with_dt.pose3d is None
                     ):
+                        print("headset_pose3d is invalid, skip")
                         continue
                     headset_pose3d = headset_pose3d_with_dt.pose3d
 
@@ -162,6 +168,7 @@ def prepare_data():
                         hand_poses_with_dt is None
                         or hand_poses_with_dt.pose3d_collection is None
                     ):
+                        print("hand_pose is invalid, skip")
                         continue
                     hand_data = hand_poses_with_dt.pose3d_collection
 
@@ -187,6 +194,7 @@ def prepare_data():
                 # 单手数据
                 handedness_key = Handedness.Right if handedness == "right" else Handedness.Left
                 if handedness_key not in hand_data.poses:
+                    print("skip " + str(handedness_key))
                     continue
                 hand_pose_data = hand_data.poses[handedness_key]
                 landmarks_world = hand_data_provider.get_hand_landmarks(
@@ -440,10 +448,10 @@ def process_sequence_batch(batch_seqs, worker_id):
 def main():
     clips = prepare_data()
     total_seqs = len(clips)
+    print(f"Total Sequences: {total_seqs}")
     chunk_size = math.ceil(total_seqs / NUM_WORKERS)
     chunks = [clips[i : i + chunk_size] for i in range(0, total_seqs, chunk_size)]
 
-    print(f"Total Sequences: {total_seqs}")
     print(f"Starting {NUM_WORKERS} workers processing ~{chunk_size} sequences each...")
 
     process_args = []
