@@ -13,13 +13,14 @@ import webdataset as wds
 from utils import *
 
 # === 配置 ===
-HO3D_ROOT = "/data_1/datasets_temp/HO3D_v3"
+HO3D_ROOT = os.environ.get("HO3D_ROOT", "/data_1/datasets_temp/HO3D_v3")
 SPLIT = os.environ.get("SPLIT", "train")  # train evaluation
 assert SPLIT == "train", f"this script only supports SPLIT={SPLIT}"
 OUTPUT_PATTERN = f"ho3d_{SPLIT}_wds_output/ho3d_{SPLIT}-worker{{worker_id}}-%06d.tar"
 MAX_COUNT = 100000  # 已修改：大幅增加数量限制，让切割主要由 MAX_SIZE 决定
 MAX_SIZE = 3 * 1024 * 1024 * 1024  # 3GB
-NUM_WORKERS = 30 # 建议设置为 CPU 核心数 - 2
+NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "30"))  # 建议设置为 CPU 核心数 - 2
+DEBUG_MAX_SEQS = int(os.environ.get("DEBUG_MAX_SEQS", "0"))
 
 # 定义需要堆叠成 Numpy 数组的字段
 NUMPY_KEYS = [
@@ -28,10 +29,14 @@ NUMPY_KEYS = [
     "joint_hand_bbox",
     "joint_cam",
     "joint_rel",
+    "joint_2d_valid",
+    "joint_3d_valid",
     "joint_valid",
     "mano_pose",
     "mano_shape",
+    "has_mano",
     "mano_valid",
+    "has_intr",
     "timestamp",
     "focal",
     "princpt",
@@ -85,6 +90,9 @@ def prepare_data():
                     current_group = []
                     prev_num = current_num
             annot_seqs.append(current_group)
+            if DEBUG_MAX_SEQS > 0 and len(annot_seqs) >= DEBUG_MAX_SEQS:
+                annot_seqs = annot_seqs[:DEBUG_MAX_SEQS]
+                break
 
     # === 构造原始标注 ===
     R_x_pi = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
@@ -152,6 +160,8 @@ def prepare_data():
                 "princpt": princpt,
             })
         annot_all.append(annot_seq_all)
+        if DEBUG_MAX_SEQS > 0 and len(annot_all) >= DEBUG_MAX_SEQS:
+            break
 
     return annot_all
 
@@ -167,39 +177,55 @@ def process_single_annot(sample, idx: int):
 
     # handedness
     handedness = "right"
+    path_parts = img_path.split(os.sep)
+    seq_name = path_parts[1]
+    frame_name = osp.splitext(path_parts[-1])[0]
 
     # joint_img, hand_bbox, joint_hand_bbox
-    joint_img = sample["joint_img"]
-    hand_bbox = sample["bbox_tight"]
-    joint_hand_bbox = joint_img - hand_bbox[None, :2]
+    joint_img = sample["joint_img"].astype(np.float32)
+    hand_bbox = sample["bbox_tight"].astype(np.float32)
+    joint_hand_bbox = (joint_img - hand_bbox[None, :2]).astype(np.float32)
 
     # joint_cam, joint_rel, joint_valid
-    joint_cam = sample["joint_cam"]
-    joint_rel = sample["joint_rel"]
-    joint_valid = np.ones_like(joint_cam[:, 0])
+    joint_cam = sample["joint_cam"].astype(np.float32)
+    joint_rel = sample["joint_rel"].astype(np.float32)
+    joint_valid = np.ones_like(joint_cam[:, 0], dtype=np.float32)
+    joint_2d_valid = joint_valid.copy()
+    joint_3d_valid = joint_valid.copy()
 
     # reorder joints order to target
     joint_img = reorder_joints(joint_img, HO3D_JOINTS_ORDER, TARGET_JOINTS_ORDER)
     joint_hand_bbox = reorder_joints(joint_hand_bbox, HO3D_JOINTS_ORDER, TARGET_JOINTS_ORDER)
     joint_cam = reorder_joints(joint_cam, HO3D_JOINTS_ORDER, TARGET_JOINTS_ORDER)
     joint_rel = reorder_joints(joint_rel, HO3D_JOINTS_ORDER, TARGET_JOINTS_ORDER)
+    joint_2d_valid = reorder_joints(
+        joint_2d_valid[..., None], HO3D_JOINTS_ORDER, TARGET_JOINTS_ORDER
+    )[..., 0]
+    joint_3d_valid = reorder_joints(
+        joint_3d_valid[..., None], HO3D_JOINTS_ORDER, TARGET_JOINTS_ORDER
+    )[..., 0]
+    joint_valid = joint_2d_valid.copy()
 
     # mano_pose, mano_shape, mano_valid
     if sample["mano_pose"] is not None:
         mano_pose = sample["mano_pose"]
         mano_shape = sample["mano_shape"]
-        mano_valid = True
+        mano_valid = np.float32(1.0)
     else:
-        mano_pose = np.zeros(shape=(48,))
-        mano_shape = np.zeros(shape=(10,))
-        mano_valid = False
+        mano_pose = np.zeros(shape=(48,), dtype=np.float32)
+        mano_shape = np.zeros(shape=(10,), dtype=np.float32)
+        mano_valid = np.float32(0.0)
+    mano_pose = np.asarray(mano_pose, dtype=np.float32)
+    mano_shape = np.asarray(mano_shape, dtype=np.float32)
+    has_mano = mano_valid.copy()
 
     # focal, princpt
-    focal = sample["focal"]
-    princpt = sample["princpt"]
+    focal = sample["focal"].astype(np.float32)
+    princpt = sample["princpt"].astype(np.float32)
+    has_intr = np.float32(1.0)
 
     # timestamp
-    timestamp = idx * 33.33333
+    timestamp = np.float32(idx * 33.33333)
 
     return {
         "img_path": img_path,
@@ -210,13 +236,22 @@ def process_single_annot(sample, idx: int):
         "joint_hand_bbox": joint_hand_bbox,
         "joint_cam": joint_cam,
         "joint_rel": joint_rel,
+        "joint_2d_valid": joint_2d_valid,
+        "joint_3d_valid": joint_3d_valid,
         "joint_valid": joint_valid,
         "mano_pose": mano_pose,
         "mano_shape": mano_shape,
+        "has_mano": has_mano,
         "mano_valid": mano_valid,
+        "has_intr": has_intr,
         "timestamp": timestamp,
         "focal": focal,
         "princpt": princpt,
+        "source_index": {
+            "seq_name": seq_name,
+            "frame_name": frame_name,
+            "handedness": handedness,
+        },
     }
 
 # === 多线程处理函数 ===
@@ -251,7 +286,7 @@ def process_sequence_batch(batch_seqs, worker_id):
                     valid_clip = False
                     break
 
-            if not valid_clip and len(clip_frames) == 0:
+            if not valid_clip or len(clip_frames) == 0:
                 continue
 
             # === 数据写入wds ===
@@ -264,6 +299,10 @@ def process_sequence_batch(batch_seqs, worker_id):
             imgs_path_json = json.dumps([v["img_path"] for v in clip_frames])
             handedness_json = json.dumps(clip_frames[0]["handedness"])
             desc_json = json.dumps(clip_descs)
+            data_source_json = json.dumps("ho3d")
+            source_split_json = json.dumps(SPLIT)
+            source_index_json = json.dumps([v["source_index"] for v in clip_frames])
+            intr_type_json = json.dumps("real")
 
             wds_sample = {
                 "__key__": key_str,
@@ -271,6 +310,10 @@ def process_sequence_batch(batch_seqs, worker_id):
                 "img_bytes.pickle": img_bytes_pickle,
                 "handedness.json": handedness_json,
                 "additional_desc.json": desc_json,
+                "data_source.json": data_source_json,
+                "source_split.json": source_split_json,
+                "source_index.json": source_index_json,
+                "intr_type.json": intr_type_json,
             }
 
             # 3. Numpy: ShardWriter 默认支持 .npy 自动处理 (np.save logic)
@@ -286,20 +329,30 @@ def process_sequence_batch(batch_seqs, worker_id):
 # === 主程序 ===
 def main():
     clips = prepare_data()
+    if DEBUG_MAX_SEQS > 0:
+        clips = clips[:DEBUG_MAX_SEQS]
 
     total_seqs = len(clips)
-    chunk_size = math.ceil(total_seqs / NUM_WORKERS)
+    if total_seqs == 0:
+        print("No valid sequences found.")
+        return
+
+    worker_count = max(NUM_WORKERS, 1)
+    chunk_size = math.ceil(total_seqs / worker_count)
     chunks = [clips[i:i + chunk_size] for i in range(0, total_seqs, chunk_size)]
 
     print(f"Total Sequences: {total_seqs}")
-    print(f"Starting {NUM_WORKERS} workers processing ~{chunk_size} sequences each...")
+    print(f"Starting {worker_count} workers processing ~{chunk_size} sequences each...")
 
     process_args = []
     for i in range(len(chunks)):
         process_args.append((chunks[i], i))
 
-    with multiprocessing.Pool(processes=NUM_WORKERS) as pool:
-        results = pool.starmap(process_sequence_batch, process_args)
+    if worker_count <= 1:
+        results = [process_sequence_batch(chunks[0], 0)]
+    else:
+        with multiprocessing.Pool(processes=worker_count) as pool:
+            results = pool.starmap(process_sequence_batch, process_args)
 
     print(f"All done! Total clips processed: {sum(results)}")
 

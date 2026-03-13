@@ -36,7 +36,28 @@ The first dimension of all per-frame numeric arrays is the temporal dimension `T
 - `joint_cam` and `joint_rel` are defined in camera space, in millimeters.
 - `focal` and `princpt` are defined in the original image coordinate system, not in crop coordinates.
 
-### 2.3 Storage Conventions
+### 2.3 Runtime Coordinate Terms
+
+Besides the stored tar fields, the V2 dataloader and preprocess layer use explicit runtime names to distinguish local coordinates before and after resizing.
+
+- `origin` means local coordinates in the original bbox-local pixel system, before resize.
+- `resized` means local coordinates in the resized patch tensor that is actually fed to the network.
+
+The runtime coordinate fields are:
+
+- `joint_hand_origin`:
+  `joint_img - hand_bbox[..., :2]`
+- `joint_patch_origin`:
+  `joint_img - patch_bbox[..., :2]`
+- `joint_patch_resized`:
+  `joint_patch_origin` scaled to the fixed `patch_size`
+
+The runtime naming rule is intentional:
+
+- `origin` fields preserve the local geometry of the original crop box;
+- `resized` fields are the only valid supervision targets for tensors that have already been resized.
+
+### 2.4 Storage Conventions
 
 - `*.json` fields are stored as JSON-serializable objects and decoded by `wds.decode()`.
 - `*.pickle` fields are stored as pickled Python objects and decoded by `wds.decode()`.
@@ -163,14 +184,38 @@ This section is normative. Every field below must follow the specified shape and
 | --- | --- | --- | --- |
 | `hand_bbox.npy` | `[T, 4]` | `float32` | Hand box in original image coordinates, format `[x1, y1, x2, y2]`. |
 | `joint_img.npy` | `[T, 21, 2]` | `float32` | 2D joints in original image coordinates, ordered as `TARGET_JOINTS_ORDER`. |
-| `joint_hand_bbox.npy` | `[T, 21, 2]` | `float32` | `joint_img - hand_bbox[..., None, :2]`. |
+| `joint_hand_bbox.npy` | `[T, 21, 2]` | `float32` | Legacy storage field for hand-local 2D joints. In V2 runtime semantics, this is equivalent to `joint_hand_origin`. |
 | `joint_cam.npy` | `[T, 21, 3]` | `float32` | Camera-space 3D joints in millimeters. Placeholder zeros are allowed only when `joint_3d_valid` is zero. |
 | `joint_rel.npy` | `[T, 21, 3]` | `float32` | Root-relative 3D joints in millimeters. Placeholder zeros are allowed only when `joint_3d_valid` is zero. |
 | `timestamp.npy` | `[T]` | `float32` | Timestamp in milliseconds. |
 | `focal.npy` | `[T, 2]` | `float32` | `[fx, fy]` in original image coordinates. |
 | `princpt.npy` | `[T, 2]` | `float32` | `[cx, cy]` in original image coordinates. |
 
-### 6.3 Supervision Availability Fields
+### 6.3 Runtime Patch And Hand Fields
+
+The following fields are runtime outputs of the V2 preprocess layer. They are not part of the canonical tar storage schema in this design phase, but they are part of the canonical in-memory interface used by the V2 dataloader and verification tooling.
+
+| Runtime Field | Shape | Dtype | Definition |
+| --- | --- | --- | --- |
+| `joint_hand_origin` | `[B, T, 21, 2]` | `float32` | Hand-local 2D joints before any hand-crop resize. Defined as `joint_img - hand_bbox[..., None, :2]`. |
+| `joint_patch_origin` | `[B, T, 21, 2]` | `float32` | Patch-local 2D joints before patch resize. Defined as `joint_img - patch_bbox[..., None, :2]`. |
+| `joint_patch_resized` | `[B, T, 21, 2]` | `float32` | Patch-local 2D joints after scaling from the original patch-local coordinate system into the fixed `patch_size` used by `patches`. This is the correct target for losses or visualization on the resized patch tensor. |
+| `patches` | `[B, T, 3, H_patch, W_patch]` | `float32` | Resized patch tensor fed to the network. |
+| `patch_bbox` | `[B, T, 4]` | `float32` | Patch box in original image coordinates, format `[x1, y1, x2, y2]`. |
+
+The runtime compatibility mapping is:
+
+- `joint_hand_bbox` is treated as `joint_hand_origin`
+- `joint_patch_bbox` is treated as `joint_patch_origin`
+
+New V2 runtime code must follow these rules:
+
+- use `joint_img` for supervision or visualization in the original image space;
+- use `joint_hand_origin` for hand-local geometry checks before resize;
+- use `joint_patch_origin` only for debugging the unresized patch-local geometry;
+- use `joint_patch_resized` for supervision or visualization on `patches`.
+
+### 6.4 Supervision Availability Fields
 
 | Field | Shape | Dtype | Definition |
 | --- | --- | --- | --- |
@@ -179,7 +224,7 @@ This section is normative. Every field below must follow the specified shape and
 | `has_mano.npy` | `[T]` | `float32` | Binary mask for MANO supervision availability. |
 | `has_intr.npy` | `[T]` | `float32` | Binary mask for intrinsics availability. If `has_intr = 0`, `focal/princpt` must not be used for supervision or geometry transforms. |
 
-### 6.4 Provenance And Intrinsics-Type Fields
+### 6.5 Provenance And Intrinsics-Type Fields
 
 | Field | Shape | Dtype | Definition |
 | --- | --- | --- | --- |
@@ -188,7 +233,7 @@ This section is normative. Every field below must follow the specified shape and
 | `source_index.json` | length `T` | JSON list of dicts | Per-frame raw-dataset index records. Each dict must allow exact reverse lookup to the raw dataset frame or instance. |
 | `intr_type.json` | scalar | string | Intrinsics type. Allowed values: `real`, `fixed_virtual`, `pseudo`, `none`. |
 
-### 6.5 Image And Metadata Fields
+### 6.6 Image And Metadata Fields
 
 | Field | Shape | Dtype | Definition |
 | --- | --- | --- | --- |
@@ -210,6 +255,8 @@ The following logic must use `joint_2d_valid.npy` and must not use `joint_3d_val
 - 2D visibility masking;
 - recomputation of hand bbox or patch bbox from projected joints;
 - any augmentation logic that treats `joint_img` as GT.
+
+If the model consumes the resized `patches` tensor, the corresponding supervision target must be `joint_patch_resized` rather than `joint_patch_origin` or the legacy `joint_patch_bbox`.
 
 ### 7.2 3D Logic
 

@@ -11,7 +11,7 @@ import cv2
 import webdataset as wds
 
 # === 利用环境变量进行配置 ===
-DEX_ROOT = "/data_1/datasets_temp/dexycb"
+DEX_ROOT = os.environ.get("DEX_ROOT", "/data_1/datasets_temp/dexycb")
 SUBJECTS = [
     '20200709-subject-01',
     '20200813-subject-02',
@@ -39,7 +39,8 @@ SPLIT = os.environ.get("SPLIT", "val")  # train val test
 OUTPUT_PATTERN = f"dexycb_{SETUP}_{SPLIT}_wds_output/dexycb_{SETUP}_{SPLIT}-worker{{worker_id}}-%06d.tar"
 MAX_COUNT = 100000  # 已修改：大幅增加数量限制，让切割主要由 MAX_SIZE 决定
 MAX_SIZE = 3 * 1024 * 1024 * 1024  # 3GB
-NUM_WORKERS = 30 # 建议设置为 CPU 核心数 - 2
+NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "30"))  # 建议设置为 CPU 核心数 - 2
+DEBUG_MAX_CLIPS = int(os.environ.get("DEBUG_MAX_CLIPS", "0"))
 
 # 定义需要堆叠成 Numpy 数组的字段
 NUMPY_KEYS = [
@@ -48,10 +49,14 @@ NUMPY_KEYS = [
     "joint_hand_bbox",
     "joint_cam",
     "joint_rel",
+    "joint_2d_valid",
+    "joint_3d_valid",
     "joint_valid",
     "mano_pose",
     "mano_shape",
+    "has_mano",
     "mano_valid",
+    "has_intr",
     "timestamp",
     "focal",
     "princpt",
@@ -124,68 +129,75 @@ if SETUP == "s3":
 _mano_tmp = np.load("models/mano/mano_lr_pca.npz")
 mano_pca_comps = {k: _mano_tmp[k] for k in _mano_tmp.files}
 _mano_tmp.close()
-clips = []
 
-for si in tqdm(subject_ind, ncols=50):
-    subject = SUBJECTS[si]
-    for cap in os.listdir(osp.join(DEX_ROOT, subject)):
-        # load shape from meta.yml
-        with open(osp.join(DEX_ROOT, subject, cap, "meta.yml"), "r") as f:
-            meta = yaml.safe_load(f)
-        num_frames = meta["num_frames"]
-        extr_path = meta["extrinsics"]
-        handedness = meta["mano_sides"][0]
-        mano_path = meta["mano_calib"][0]
 
-        # load the mano shape
-        with open(
-            osp.join(DEX_ROOT, "calibration", f"mano_{mano_path}", "mano.yml"), "r"
-        ) as f:
-            mano_shape = yaml.safe_load(f)
-        # mano_shape = np.array(mano_shape["betas"])  # [10]
+def prepare_clips():
+    clips = []
 
-        # load the extrinsics
-        with open(
-            osp.join(
-                DEX_ROOT, "calibration", f"extrinsics_{extr_path}", "extrinsics.yml"
-            ),
-            "r",
-        ) as f:
-            extrinsics = yaml.load(f, Loader=yaml.FullLoader)
+    for si in tqdm(subject_ind, ncols=50):
+        subject = SUBJECTS[si]
+        for cap in os.listdir(osp.join(DEX_ROOT, subject)):
+            with open(osp.join(DEX_ROOT, subject, cap, "meta.yml"), "r") as f:
+                meta = yaml.safe_load(f)
+            num_frames = meta["num_frames"]
+            extr_path = meta["extrinsics"]
+            handedness = meta["mano_sides"][0]
+            mano_path = meta["mano_calib"][0]
 
-        for sri in serial_ind:
-            prev, clip = -1, []
-            serial = meta["serials"][sri]
-            # load the intrinsics
             with open(
-                osp.join(DEX_ROOT, "calibration/intrinsics", f"{serial}_640x480.yml"),
+                osp.join(DEX_ROOT, "calibration", f"mano_{mano_path}", "mano.yml"), "r"
+            ) as f:
+                mano_shape = yaml.safe_load(f)
+
+            with open(
+                osp.join(
+                    DEX_ROOT, "calibration", f"extrinsics_{extr_path}", "extrinsics.yml"
+                ),
                 "r",
             ) as f:
-                intrinsics = yaml.load(f, Loader=yaml.FullLoader)
-            for i in [x for x in sequence_ind if x < num_frames]:
-                annot_npz = np.load(
-                    osp.join(DEX_ROOT, subject, cap, serial, f"labels_{i:06}.npz")
-                )
-                if bool(np.all(annot_npz["joint_2d"] == -1)):  # invalid annotations
-                    continue
-                else:  # valid annotations
+                extrinsics = yaml.load(f, Loader=yaml.FullLoader)
+
+            for sri in serial_ind:
+                prev, clip = -1, []
+                serial = meta["serials"][sri]
+                with open(
+                    osp.join(DEX_ROOT, "calibration/intrinsics", f"{serial}_640x480.yml"),
+                    "r",
+                ) as f:
+                    intrinsics = yaml.load(f, Loader=yaml.FullLoader)
+                for i in [x for x in sequence_ind if x < num_frames]:
+                    annot_path = osp.join(DEX_ROOT, subject, cap, serial, f"labels_{i:06}.npz")
+                    annot_npz = np.load(annot_path)
+                    if bool(np.all(annot_npz["joint_2d"] == -1)):
+                        continue
+
                     item = (
-                        serial,  # camera
-                        osp.join(subject, cap, serial, f"color_{i:06}.jpg"),  # image
+                        subject,
+                        cap,
+                        serial,
+                        osp.join(subject, cap, serial, f"color_{i:06}.jpg"),
                         handedness,
-                        tuple(mano_shape["betas"]),  # mano_shape
-                        intrinsics["color"],  # intr
-                        extrinsics["extrinsics"][serial],  # extr
-                        osp.join(subject, cap, serial, f"labels_{i:06}.npz"),  # annot
+                        tuple(mano_shape["betas"]),
+                        intrinsics["color"],
+                        extrinsics["extrinsics"][serial],
+                        osp.join(subject, cap, serial, f"labels_{i:06}.npz"),
+                        i,
                     )
                     if prev == -1 or prev + 1 == i:
                         clip.append(item)
                         prev = i
                     else:
                         clips.append(clip)
+                        if DEBUG_MAX_CLIPS > 0 and len(clips) >= DEBUG_MAX_CLIPS:
+                            return clips[:DEBUG_MAX_CLIPS]
                         clip = [item]
                         prev = i
-            clips.append(clip)
+                if len(clip) > 0:
+                    clips.append(clip)
+                    if DEBUG_MAX_CLIPS > 0 and len(clips) >= DEBUG_MAX_CLIPS:
+                        return clips[:DEBUG_MAX_CLIPS]
+
+    return clips
 
 # === 将单个标注转换为wds的格式 ===
 def process_single_annot(sample, label, idx: int):
@@ -194,43 +206,53 @@ def process_single_annot(sample, label, idx: int):
         idx: 该样本在序列中的位置，用于时间戳的计算
     """
     # img_path
-    img_path = sample[1]  # str
+    subject = sample[0]
+    cap = sample[1]
+    serial = sample[2]
+    img_path = sample[3]  # str
+    frame_idx = sample[9]
 
     # img_bytes
     img = cv2.imread(osp.join(DEX_ROOT, img_path))
+    if img is None:
+        raise FileNotFoundError(f"Image not found: {osp.join(DEX_ROOT, img_path)}")
     success, img_bytes = cv2.imencode(".webp", img, [cv2.IMWRITE_WEBP_QUALITY, 100])
     if not success:
         raise Exception(f"Failed to encode the image: {osp.join(DEX_ROOT, img_path)}")
 
     # handedness
-    handedness = sample[2]  # right, left
+    handedness = sample[4]  # right, left
 
     # joint_img, hand_bbox, joint_hand_bbox
-    joint_img = label["joint_2d"][0]  # [J,2]
+    joint_img = np.asarray(label["joint_2d"][0], dtype=np.float32)  # [J,2]
     xm, ym = np.min(joint_img, axis=0)
     xM, yM = np.max(joint_img, axis=0)
-    hand_bbox = np.stack([xm, ym, xM, yM], axis=-1)
-    joint_hand_bbox = joint_img - hand_bbox[None, :2]
+    hand_bbox = np.stack([xm, ym, xM, yM], axis=-1).astype(np.float32)
+    joint_hand_bbox = (joint_img - hand_bbox[None, :2]).astype(np.float32)
 
     # joint_cam, joint_rel, joint_valid
-    joint_cam = label["joint_3d"][0] * 1e3  # [J,3] 毫米单位
-    joint_rel = joint_cam - joint_cam[:1]
-    joint_valid = np.ones_like(joint_cam[:, 0])
+    joint_cam = np.asarray(label["joint_3d"][0] * 1e3, dtype=np.float32)
+    joint_rel = (joint_cam - joint_cam[:1]).astype(np.float32)
+    joint_valid = np.ones_like(joint_cam[:, 0], dtype=np.float32)
+    joint_2d_valid = joint_valid.copy()
+    joint_3d_valid = joint_valid.copy()
 
     # mano_pose, mano_shape, mano_valid
     mano_pose_pca = label["pose_m"][:, :48]  # 最后三个元素是位移，用不着
     mano_pose_pca[:, 3:] = mano_pose_pca[:, 3:] @ mano_pca_comps[handedness]
-    mano_pose = mano_pose_pca[0]  # [48]
-    mano_shape = np.array(sample[3])
-    mano_valid = True
+    mano_pose = np.asarray(mano_pose_pca[0], dtype=np.float32)  # [48]
+    mano_shape = np.asarray(sample[5], dtype=np.float32)
+    mano_valid = np.float32(1.0)
+    has_mano = mano_valid.copy()
 
     # timestamp
     # 30 fps, time per frame = 1/30 s = 1000/30 ms = 100/3 = 33.33333
-    timestamp = idx * 33.3333333
+    timestamp = np.float32(idx * 33.3333333)
 
     # focal, princpt
-    focal = np.array([sample[4]["fx"], sample[4]["fy"]])
-    princpt = np.array([sample[4]["ppx"], sample[4]["ppy"]])
+    focal = np.array([sample[6]["fx"], sample[6]["fy"]], dtype=np.float32)
+    princpt = np.array([sample[6]["ppx"], sample[6]["ppy"]], dtype=np.float32)
+    has_intr = np.float32(1.0)
 
     return {
         "img_path": img_path, # 不需要存入最终 Tensor
@@ -241,13 +263,24 @@ def process_single_annot(sample, label, idx: int):
         "joint_hand_bbox": joint_hand_bbox,
         "joint_cam": joint_cam,
         "joint_rel": joint_rel,
+        "joint_2d_valid": joint_2d_valid,
+        "joint_3d_valid": joint_3d_valid,
         "joint_valid": joint_valid,
         "mano_pose": mano_pose,
         "mano_shape": mano_shape,
+        "has_mano": has_mano,
         "mano_valid": mano_valid,
+        "has_intr": has_intr,
         "timestamp": timestamp,
         "focal": focal,
         "princpt": princpt,
+        "source_index": {
+            "subject": subject,
+            "capture": cap,
+            "serial": serial,
+            "frame_idx": frame_idx,
+            "handedness": handedness,
+        },
     }
 
 # === 多线程处理函数 ===
@@ -266,7 +299,7 @@ def process_sequence_batch(batch_seqs, worker_id):
             # 读取标注信息
             labels = []
             for i in range(len(annots)):
-                label = np.load(osp.join(DEX_ROOT, annots[i][-1]))
+                label = np.load(osp.join(DEX_ROOT, annots[i][8]))
                 labels.append(label)
             # 划分有效帧
             start = 0
@@ -312,6 +345,10 @@ def process_sequence_batch(batch_seqs, worker_id):
                 imgs_path_json = json.dumps([v["img_path"] for v in clip_frames])
                 handedness_json = json.dumps(clip_frames[0]["handedness"])
                 desc_json = json.dumps(clip_descs)
+                data_source_json = json.dumps("dexycb")
+                source_split_json = json.dumps(SPLIT)
+                source_index_json = json.dumps([v["source_index"] for v in clip_frames])
+                intr_type_json = json.dumps("real")
 
                 wds_sample = {
                     "__key__": key_str,
@@ -319,6 +356,10 @@ def process_sequence_batch(batch_seqs, worker_id):
                     "img_bytes.pickle": img_bytes_pickle,
                     "handedness.json": handedness_json,
                     "additional_desc.json": desc_json,
+                    "data_source.json": data_source_json,
+                    "source_split.json": source_split_json,
+                    "source_index.json": source_index_json,
+                    "intr_type.json": intr_type_json,
                 }
 
                 # 3. Numpy: ShardWriter 默认支持 .npy 自动处理 (np.save logic)
@@ -334,19 +375,28 @@ def process_sequence_batch(batch_seqs, worker_id):
 # process_sequence_batch(clips[:10], 0)
 # === 主程序 ===
 def main():
+    clips = prepare_clips()
     total_seqs = len(clips)
-    chunk_size = math.ceil(total_seqs / NUM_WORKERS)
+    if total_seqs == 0:
+        print("No valid clips found.")
+        return
+
+    worker_count = max(NUM_WORKERS, 1)
+    chunk_size = math.ceil(total_seqs / worker_count)
     chunks = [clips[i:i + chunk_size] for i in range(0, total_seqs, chunk_size)]
 
     print(f"Total Sequences: {total_seqs}")
-    print(f"Starting {NUM_WORKERS} workers processing ~{chunk_size} sequences each...")
+    print(f"Starting {worker_count} workers processing ~{chunk_size} sequences each...")
 
     process_args = []
     for i in range(len(chunks)):
         process_args.append((chunks[i], i))
 
-    with multiprocessing.Pool(processes=NUM_WORKERS) as pool:
-        results = pool.starmap(process_sequence_batch, process_args)
+    if worker_count <= 1:
+        results = [process_sequence_batch(chunks[0], 0)]
+    else:
+        with multiprocessing.Pool(processes=worker_count) as pool:
+            results = pool.starmap(process_sequence_batch, process_args)
 
     print(f"All done! Total clips processed: {sum(results)}")
 
