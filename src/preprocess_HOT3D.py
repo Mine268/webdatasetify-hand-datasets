@@ -448,7 +448,7 @@ def process_sequence_batch(batch_seqs, worker_id):
                 continue
 
             # === 数据写入wds ===
-            key_str = f"{worker_id}_{cx}_hot3d"
+            key_str = f"{worker_id}_{cx}_{SPLIT}_hot3d"
 
             # 1. Pickle: List[bytes] -> bytes
             img_bytes_pickle = pickle.dumps([f["img_bytes"] for f in clip_frames])

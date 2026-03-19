@@ -318,7 +318,7 @@ def process_sequence_batch(batch_seqs, worker_id):
                         continue
 
                     # ================= 聚合数据并写入 WDS =================
-                    key_str = f"{capture_id}_{seq_name}_{cam_id}_{h}_{current_start_frame_idx}"
+                    key_str = f"{capture_id}_{seq_name}_{cam_id}_{h}_{current_start_frame_idx}_{SPLIT}_ih26m"
 
                     # === 关键修复：显式序列化 Pickle 和 JSON ===
                     # ShardWriter 不会自动处理复杂对象（如 list/dict）到 bytes 的转换

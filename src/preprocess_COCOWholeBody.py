@@ -221,7 +221,7 @@ def process_task_batch(batch_tasks: List[Tuple[int, str]], worker_id: int):
             if frame is None:
                 continue
 
-            key_str = f"{frame['source_index']['image_id']}_{ann_id}_{handedness}_coco_wb"
+            key_str = f"{frame['source_index']['image_id']}_{ann_id}_{handedness}_{SPLIT}_coco_wb"
             wds_sample = {
                 "__key__": key_str,
                 "imgs_path.json": json.dumps([frame["img_path"]]),
