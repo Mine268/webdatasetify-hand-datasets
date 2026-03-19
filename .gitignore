@@ -21,3 +21,4 @@ temp*/
 .vscode/
 
 temp/
+*_wds_output/
