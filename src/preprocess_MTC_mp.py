@@ -21,10 +21,12 @@ OUTPUT_PATTERN = f"mtc_{SPLIT}_wds_output/mtc_{SPLIT}-worker{{worker_id}}-%06d.t
 MAX_COUNT = 100000
 MAX_SIZE = 3 * 1024 * 1024 * 1024
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "8"))
-DEBUG_MAX_SAMPLES = int(os.environ.get("DEBUG_MAX_SAMPLES", "0"))
+DEBUG_MAX_CLIPS = int(os.environ.get("DEBUG_MAX_CLIPS", os.environ.get("DEBUG_MAX_SAMPLES", "0")))
 MIN_VISIBLE_RATIO = float(os.environ.get("MIN_VISIBLE_RATIO", "0.8"))
 MIN_VISIBLE_JOINTS = max(1, int(math.ceil(21 * MIN_VISIBLE_RATIO)))
 BBOX_EXPAND_RATIO = float(os.environ.get("BBOX_EXPAND_RATIO", "1.2"))
+FRAME_GAP = int(os.environ.get("FRAME_GAP", "5"))
+MAX_CLIP_LEN = int(os.environ.get("MAX_CLIP_LEN", "256"))
 
 NUMPY_KEYS = [
     "hand_bbox",
@@ -141,9 +143,9 @@ def _build_bbox_from_joints(
     return _expand_bbox_xyxy(bbox, image_width, image_height, expand_ratio)
 
 
-def build_tasks() -> List[Tuple[int, str, int]]:
+def build_sequences() -> List[List[Tuple[int, str, int, int]]]:
     annotations = load_annotations()
-    tasks: List[Tuple[int, str, int]] = []
+    grouped: Dict[Tuple[str, int, str, int], List[Tuple[int, str, int, int]]] = {}
     for sample_idx, sample in enumerate(annotations):
         for hand_key in ("left_hand", "right_hand"):
             if hand_key not in sample:
@@ -158,10 +160,36 @@ def build_tasks() -> List[Tuple[int, str, int]]:
                 visible = (inside > 0) & (occluded == 0)
                 if int(np.sum(visible)) < MIN_VISIBLE_JOINTS:
                     continue
-                tasks.append((sample_idx, hand_key, int(camera_id)))
-                if DEBUG_MAX_SAMPLES > 0 and len(tasks) >= DEBUG_MAX_SAMPLES:
-                    return tasks[:DEBUG_MAX_SAMPLES]
-    return tasks
+                group_key = (
+                    sample["seqName"],
+                    int(sample["id"]),
+                    hand_key,
+                    int(camera_id),
+                )
+                grouped.setdefault(group_key, []).append(
+                    (sample_idx, hand_key, int(camera_id), int(sample["frame_str"]))
+                )
+
+    clips: List[List[Tuple[int, str, int, int]]] = []
+    for items in grouped.values():
+        items.sort(key=lambda x: x[3])
+        start = 0
+        for i in range(1, len(items) + 1):
+            is_break = i == len(items) or (items[i][3] - items[i - 1][3]) != FRAME_GAP
+            if not is_break:
+                continue
+
+            segment = items[start:i]
+            if MAX_CLIP_LEN > 0 and len(segment) > MAX_CLIP_LEN:
+                for j in range(0, len(segment), MAX_CLIP_LEN):
+                    clips.append(segment[j : j + MAX_CLIP_LEN])
+            else:
+                clips.append(segment)
+            start = i
+
+    if DEBUG_MAX_CLIPS > 0:
+        return clips[:DEBUG_MAX_CLIPS]
+    return clips
 
 
 def process_single_sample(
@@ -284,7 +312,7 @@ def process_single_sample(
     }
 
 
-def process_batch(tasks: List[Tuple[int, str, int]], worker_id: int) -> int:
+def process_batch(clips: List[List[Tuple[int, str, int, int]]], worker_id: int) -> int:
     cv2.setNumThreads(0)
     cv2.ocl.setUseOpenCL(False)
 
@@ -292,33 +320,44 @@ def process_batch(tasks: List[Tuple[int, str, int]], worker_id: int) -> int:
     processed_count = 0
 
     with wds.ShardWriter(worker_pattern, maxcount=MAX_COUNT, maxsize=MAX_SIZE) as sink:
-        for sample_idx, hand_key, camera_id in tasks:
-            try:
-                frame = process_single_sample(sample_idx, hand_key, camera_id)
-            except Exception as ex:
-                print(
-                    f"[Worker {worker_id}] sample_idx={sample_idx} hand={hand_key} camera_id={camera_id} error: {ex}"
-                )
+        for clip in clips:
+            clip_frames = []
+            clip_descs = []
+            valid_clip = True
+
+            for sample_idx, hand_key, camera_id, _frame_idx in clip:
+                try:
+                    frame = process_single_sample(sample_idx, hand_key, camera_id)
+                except Exception as ex:
+                    print(
+                        f"[Worker {worker_id}] sample_idx={sample_idx} hand={hand_key} camera_id={camera_id} error: {ex}"
+                    )
+                    valid_clip = False
+                    break
+                clip_frames.append(frame)
+                clip_descs.append(frame["additional_desc"])
+
+            if not valid_clip or len(clip_frames) == 0:
                 continue
 
-            source_index = frame["source_index"]
+            source_index = clip_frames[0]["source_index"]
             key_str = (
                 f"{source_index['seq_name']}_{source_index['frame_str']}_"
                 f"{source_index['camera_name']}_{source_index['handedness']}_{SPLIT}_mtc"
             )
             wds_sample = {
                 "__key__": key_str,
-                "imgs_path.json": json.dumps([frame["img_path"]]),
-                "img_bytes.pickle": pickle.dumps([frame["img_bytes"]]),
-                "handedness.json": json.dumps(frame["handedness"]),
-                "additional_desc.json": json.dumps([frame["additional_desc"]]),
+                "imgs_path.json": json.dumps([frame["img_path"] for frame in clip_frames]),
+                "img_bytes.pickle": pickle.dumps([frame["img_bytes"] for frame in clip_frames]),
+                "handedness.json": json.dumps(clip_frames[0]["handedness"]),
+                "additional_desc.json": json.dumps(clip_descs),
                 "data_source.json": json.dumps("mtc"),
                 "source_split.json": json.dumps(SPLIT),
-                "source_index.json": json.dumps([frame["source_index"]]),
+                "source_index.json": json.dumps([frame["source_index"] for frame in clip_frames]),
                 "intr_type.json": json.dumps("real"),
             }
             for key in NUMPY_KEYS:
-                wds_sample[f"{key}.npy"] = np.stack([frame[key]])
+                wds_sample[f"{key}.npy"] = np.stack([frame[key] for frame in clip_frames])
             sink.write(wds_sample)
             processed_count += 1
 
@@ -334,19 +373,20 @@ def main() -> None:
         f"MTC filter: visible joints >= {MIN_VISIBLE_JOINTS}/21 "
         f"(ratio={MIN_VISIBLE_RATIO:.2f})"
     )
+    print(f"MTC temporal packing: frame_gap={FRAME_GAP}, max_clip_len={MAX_CLIP_LEN}")
 
-    tasks = build_tasks()
-    total_tasks = len(tasks)
-    if total_tasks == 0:
+    clips = build_sequences()
+    total_clips = len(clips)
+    if total_clips == 0:
         print("No valid MTC hand-camera samples found.")
         return
 
     worker_count = max(NUM_WORKERS, 1)
-    chunk_size = math.ceil(total_tasks / worker_count)
-    chunks = [tasks[i : i + chunk_size] for i in range(0, total_tasks, chunk_size)]
+    chunk_size = math.ceil(total_clips / worker_count)
+    chunks = [clips[i : i + chunk_size] for i in range(0, total_clips, chunk_size)]
 
-    print(f"Total MTC hand-camera samples: {total_tasks}")
-    print(f"Starting {len(chunks)} workers processing ~{chunk_size} samples each ...")
+    print(f"Total MTC clips: {total_clips}")
+    print(f"Starting {len(chunks)} workers processing ~{chunk_size} clips each ...")
 
     process_args = [(chunk, worker_id) for worker_id, chunk in enumerate(chunks)]
     if len(chunks) == 1:
