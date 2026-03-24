@@ -17,6 +17,7 @@ Datasets:
   ho3d
   hot3d
   coco-wb
+  rhd
 
 If no dataset is provided, all supported datasets are processed.
 
@@ -28,6 +29,7 @@ Environment overrides:
   HO3D_ROOT     HO3D dataset root.
   HOT3D_ROOT    HOT3D dataset root.
   COCO_ROOT     COCO-WholeBody dataset root.
+  RHD_ROOT      Rendered Hand Pose Dataset root.
   NUM_WORKERS   Optional shared worker count passed to all preprocess scripts.
 
 Notes:
@@ -51,6 +53,7 @@ DEX_ROOT="${DEX_ROOT:-/mnt/qnap/data/datasets/dexycb}"
 HO3D_ROOT="${HO3D_ROOT:-/mnt/qnap/data/datasets/ho3d_v3/ho3d_v3}"
 HOT3D_ROOT="${HOT3D_ROOT:-/mnt/qnap/data/datasets/hot3d}"
 COCO_ROOT="${COCO_ROOT:-/mnt/qnap/data/datasets/coco2017}"
+RHD_ROOT="${RHD_ROOT:-/mnt/qnap/data/datasets/rhd/RHD_published_v2}"
 
 SELECTED_DATASETS=("$@")
 
@@ -195,6 +198,21 @@ build_coco_wb() {
   done
 }
 
+build_rhd() {
+  local split
+  for split in train evaluation; do
+    local -a env_args=(
+      "RHD_ROOT=$RHD_ROOT"
+      "SPLIT=$split"
+    )
+    append_num_workers_env env_args
+    run_preprocess src/preprocess_RHD_mp.py "${env_args[@]}"
+    run_repack \
+      "rhd_${split}_wds_output/rhd_${split}-worker*.tar" \
+      "$DEST_ROOT/RHD/$split/%06d.tar"
+  done
+}
+
 if should_run ih26m; then
   build_ih26m
 fi
@@ -213,6 +231,10 @@ fi
 
 if should_run coco-wb; then
   build_coco_wb
+fi
+
+if should_run rhd; then
+  build_rhd
 fi
 
 log "All requested dataset builds completed."
