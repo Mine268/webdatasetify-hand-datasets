@@ -246,6 +246,8 @@ def verify_processed_sample(
             "left": smplx.create("models", "mano", use_pca=False, is_rhand=False),
         }
         hand = batch["handedness"][bx]
+        if batch["flip"][bx]:
+            hand = "right" if hand == "left" else "left"
         mano_pose = batch["mano_pose"][bx, tx][None].cpu()
         mano_shape = batch["mano_shape"][bx, tx][None].cpu()
         focal = batch["focal"][bx, tx].cpu()
@@ -288,6 +290,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--shardshuffle", type=int, default=0)
+    parser.add_argument("--shuffle-buffer", type=int, default=5000)
     parser.add_argument("--sample-index", type=int, default=0)
     parser.add_argument("--frame-index", type=int, default=0)
     parser.add_argument("--device", default="cpu")
@@ -314,6 +317,7 @@ def main() -> None:
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         shardshuffle=args.shardshuffle,
+        shuffle_buffer=args.shuffle_buffer,
         default_data_source=args.default_data_source,
         default_source_split=args.default_source_split,
     )

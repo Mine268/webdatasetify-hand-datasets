@@ -23,8 +23,9 @@ assert SPLIT == "train", (
 SPLIT_TO_ANN_DIR = {
     "train": "train",
 }
-OUTPUT_PATTERN = (
-    f"assemblyhands_{SPLIT}_wds_output/assemblyhands_{SPLIT}-worker{{worker_id}}-%06d.tar"
+OUTPUT_PATTERN = os.environ.get(
+    "OUTPUT_PATTERN",
+    f"assemblyhands_{SPLIT}_wds_output/assemblyhands_{SPLIT}-worker{{worker_id}}-%06d.tar",
 )
 MAX_COUNT = 100000
 MAX_SIZE = 3 * 1024 * 1024 * 1024
@@ -122,6 +123,20 @@ def _resolve_camera_name(camera_name: str, calib_seq: Dict) -> str:
     raise KeyError(camera_name)
 
 
+def _resolve_frame_key(seq_name: str, image_info: Dict, ann: Dict) -> Tuple[str, str]:
+    joint_3d_all = load_joint_3d()
+    calib_all = load_calib()
+
+    candidate_keys = [
+        ("image_frame_idx", f"{int(image_info['frame_idx']):06d}"),
+        ("annotation_frame_id", f"{int(ann['frame_id']):06d}"),
+    ]
+    for source_name, frame_key in candidate_keys:
+        if frame_key in joint_3d_all[seq_name] and frame_key in calib_all[seq_name]["extrinsics"]:
+            return frame_key, source_name
+    raise KeyError(candidate_keys[0][1])
+
+
 def _expand_bbox_xyxy(
     bbox: np.ndarray,
     image_width: int,
@@ -184,9 +199,10 @@ def process_single_sample(ann_idx: int, handedness: str) -> Dict[str, object]:
     ego_data = load_ego_data()
     joint_3d_all = load_joint_3d()
     calib_all = load_calib()
+    images = {img["id"]: img for img in ego_data["images"]}
 
     ann = ego_data["annotations"][ann_idx]
-    image_info = ego_data["images"][ann["image_id"]]
+    image_info = images[ann["image_id"]]
     file_name = _resolve_file_name(image_info["file_name"])
     image_abspath = osp.join(AH_ROOT, file_name)
     image = cv2.imread(image_abspath)
@@ -201,10 +217,10 @@ def process_single_sample(ann_idx: int, handedness: str) -> Dict[str, object]:
     hand_slice = HAND_TO_INDEX[handedness]
     keypoints_2d = np.asarray(ann["keypoints"], dtype=np.float32).reshape(42, 3)
     joint_2d_valid_ann = np.asarray(ann["joint_valid"], dtype=np.float32)
-    frame_str = f"{int(ann['frame_id']):06d}"
     seq_name = image_info["seq_name"]
     camera_name = image_info["camera"]
     calib_camera_name = _resolve_camera_name(camera_name, calib_all[seq_name])
+    frame_str, frame_key_source = _resolve_frame_key(seq_name, image_info, ann)
 
     joint_world = np.asarray(
         joint_3d_all[seq_name][frame_str]["world_coord"], dtype=np.float32
@@ -219,7 +235,7 @@ def process_single_sample(ann_idx: int, handedness: str) -> Dict[str, object]:
     K = np.asarray(calib_all[seq_name]["intrinsics"][calib_camera_name], dtype=np.float32)
     R = extr[:, :3]
     t = extr[:, 3:]
-    joint_cam = (R @ joint_world.T + t).T
+    joint_cam = (R @ joint_world.T + t).T[hand_slice].astype(np.float32)
     joint_img_annot = keypoints_2d[hand_slice, :2].astype(np.float32)
     joint_img_proj_h = joint_cam @ K.T
     joint_img_proj = (joint_img_proj_h[:, :2] / joint_img_proj_h[:, 2:]).astype(np.float32)
@@ -235,7 +251,6 @@ def process_single_sample(ann_idx: int, handedness: str) -> Dict[str, object]:
     bbox = np.asarray(ann["bbox"][handedness], dtype=np.float32)
     bbox = _expand_bbox_xyxy(bbox, image_width, image_height, BBOX_EXPAND_RATIO)
     joint_hand_bbox = joint_img - bbox[None, :2]
-    joint_cam = joint_cam[hand_slice].astype(np.float32)
     joint_rel = (joint_cam - joint_cam[-1:]).astype(np.float32)
 
     joint_img = reorder_joints(joint_img, IH26M_RJOINTS_ORDER, TARGET_JOINTS_ORDER)
@@ -265,6 +280,8 @@ def process_single_sample(ann_idx: int, handedness: str) -> Dict[str, object]:
         "seq_name": seq_name,
         "frame_idx": int(image_info["frame_idx"]),
         "frame_id": int(ann["frame_id"]),
+        "frame_key": frame_str,
+        "frame_key_source": frame_key_source,
         "image_id": int(image_info["id"]),
         "rectified_ego": True,
         "bbox_source": "annotation",
@@ -279,6 +296,8 @@ def process_single_sample(ann_idx: int, handedness: str) -> Dict[str, object]:
         "calib_camera": calib_camera_name,
         "frame_idx": int(image_info["frame_idx"]),
         "frame_id": int(ann["frame_id"]),
+        "frame_key": frame_str,
+        "frame_key_source": frame_key_source,
         "handedness": handedness,
     }
 
