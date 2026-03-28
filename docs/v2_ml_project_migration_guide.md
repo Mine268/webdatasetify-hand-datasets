@@ -664,6 +664,40 @@ Examples:
 - COCO-WB:
   `image_id`, `ann_id`
 
+For AssemblyHands, prefer `imgs_path` as the first reproduction key when debugging export issues.
+
+Reason:
+
+- `imgs_path` maps directly to `ego_data["images"][*]["file_name"]`
+- it is the fastest way to recover the exact raw frame without relying on intermediate indexing fields
+- if `source_index` ever looks suspicious, `imgs_path` is the safer fallback
+
+### 12.5 AssemblyHands Export Postmortem
+
+AssemblyHands required an extra export-side debug pass after `verify_wds_v2.py` showed that `origin/hand_bbox-joint_img.png` and `origin/joint_cam_reproj.png` disagreed, while DexYCB did not show the same issue.
+
+Root causes:
+
+- `process_single_sample()` used `ego_data["images"][ann["image_id"]]`, which treated `image_id` as a Python list index instead of looking up the image by id. This could silently pair one annotation with the wrong image metadata, sequence, camera, and frame.
+- when `use_projected_2d=True`, `joint_img_proj` was computed before slicing to the current hand. That allowed a 42-joint full-hand projection to leak into the per-hand 21-joint export path.
+
+Observed symptom pattern:
+
+- raw AssemblyHands annotations and raw `joint_cam + K` reprojection were numerically consistent for valid points
+- DexYCB exports remained numerically consistent under the same verification tool
+- only exported AssemblyHands WDS samples showed a mismatch between stored `joint_img` and reprojected `joint_cam`
+
+Fix:
+
+- resolve `image_info` by building an `{image_id: image_info}` lookup map
+- slice `joint_cam` to the current hand before generating `joint_img_proj`
+- regenerate the AssemblyHands WebDataset shards after applying the fix
+
+Verification result after regeneration:
+
+- `verify_wds_v2.py` on `/mnt/qnap/data/datasets/webdatasets2/AssemblyHands/train/*.tar` showed near-zero reprojection error again
+- on a 20-sample numeric scan from `train/000000.tar`, the maximum valid-point reprojection error was approximately `3e-5` pixels per axis
+
 
 ## 13. Validation Checklist Before Switching Production Training
 

@@ -13,7 +13,7 @@ Environment overrides:
   ASSEMBLYHANDS_ROOT AssemblyHands dataset root.
   DEST_ROOT          Final WebDataset output root for AssemblyHands.
   NUM_WORKERS        Worker count passed to preprocess_AssemblyHands_mp.py.
-  BBOX_EXPAND_RATIO  Hand bbox expansion ratio.
+  BBOX_EXPAND_RATIO  Hand bbox expansion ratio. Current production recommendation: 1.0.
   FRAME_GAP          Temporal continuity gap in frame_idx. Default: 2.
   MAX_CLIP_LEN       Maximum frames per exported clip. Default: 256.
   MAX_SIZE_GB        Max size per repacked tar shard.
@@ -21,6 +21,10 @@ Environment overrides:
   OVERWRITE          When set to 1, remove previous worker tar files and destination tar files first.
   CLEAN_WORKER_TARS  When set to 1, delete temporary worker tar files after successful repack.
   DEBUG_MAX_CLIPS    Optional cap for preprocess_AssemblyHands_mp.py debugging.
+
+Recommended full export:
+  PYTHONHASHSEED=0 BBOX_EXPAND_RATIO=1.0 OVERWRITE=1 CLEAN_WORKER_TARS=1 \
+    bash build_assemblyhands_wds.sh
 EOF
   exit 0
 fi
